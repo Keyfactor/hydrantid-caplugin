@@ -149,7 +149,7 @@ The plugin supports the following standard CRL revocation reasons:
 
 ## Gateway Registration
 
-        ### CA Connection Configuration
+### CA Connection Configuration
 
         When registering the HydrantId CA in the AnyCA Gateway, you'll need to provide the following configuration parameters:
 
