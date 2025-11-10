@@ -151,75 +151,75 @@ The plugin supports the following standard CRL revocation reasons:
 
 ### CA Connection Configuration
 
-        When registering the HydrantId CA in the AnyCA Gateway, you'll need to provide the following configuration parameters:
+  When registering the HydrantId CA in the AnyCA Gateway, you'll need to provide the following configuration parameters:
 
-        | Parameter | Description | Required | Example |
-        |-----------|-------------|----------|---------|
-        | **HydrantIdBaseUrl** | Full URL to the HydrantId API endpoint | Yes | `https://acm.hydrantid.com` or `https://acm-stage.hydrantid.com` |
-        | **HydrantIdAuthId** | API Authentication ID provided by HydrantId | Yes | `your-auth-id` |
-        | **HydrantIdAuthKey** | API Authentication Key provided by HydrantId | Yes | `your-secret-auth-key` |
+  | Parameter | Description | Required | Example |
+  |-----------|-------------|----------|---------|
+  | **HydrantIdBaseUrl** | Full URL to the HydrantId API endpoint | Yes | `https://acm.hydrantid.com` or `https://acm-stage.hydrantid.com` |
+  | **HydrantIdAuthId** | API Authentication ID provided by HydrantId | Yes | `your-auth-id` |
+  | **HydrantIdAuthKey** | API Authentication Key provided by HydrantId | Yes | `your-secret-auth-key` |
 
-        ### Template (Product) Configuration
+### Template (Product) Configuration
 
-        Each certificate template (policy) discovered from HydrantId requires configuration for enrollment:
+  Each certificate template (policy) discovered from HydrantId requires configuration for enrollment:
 
-        | Parameter | Description | Required | Example |
-        |-----------|-------------|----------|---------|
-        | **ValidityPeriod** | Time unit for certificate lifetime | Yes | `Days`, `Months`, or `Years` |
-        | **ValidityUnits** | Numeric value for the validity period | Yes | `365` (for 1 year in days), `12` (for 1 year in months), `2` (for 2 years) |
-        | **RenewalDays** | Days before expiration to trigger renewal | Yes | `30` (renew within 30 days of expiration) |
+  | Parameter | Description | Required | Example |
+  |-----------|-------------|----------|---------|
+  | **ValidityPeriod** | Time unit for certificate lifetime | Yes | `Days`, `Months`, or `Years` |
+  | **ValidityUnits** | Numeric value for the validity period | Yes | `365` (for 1 year in days), `12` (for 1 year in months), `2` (for 2 years) |
+  | **RenewalDays** | Days before expiration to trigger renewal | Yes | `30` (renew within 30 days of expiration) |
 
-        **Important Notes:**
-        - Template names (Product IDs) are automatically discovered from HydrantId using the GET /api/v2/policies endpoint
-        - The ValidityPeriod and ValidityUnits combine to determine the certificate lifetime
-        - RenewalDays determines the behavior for certificate renewal:
-          - Within window: Performs a renewal operation (maintains certificate lineage)
-          - Outside window: Performs a re-issue operation (new certificate enrollment)
+  **Important Notes:**
+  - Template names (Product IDs) are automatically discovered from HydrantId using the GET /api/v2/policies endpoint
+  - The ValidityPeriod and ValidityUnits combine to determine the certificate lifetime
+  - RenewalDays determines the behavior for certificate renewal:
+    - Within window: Performs a renewal operation (maintains certificate lineage)
+    - Outside window: Performs a re-issue operation (new certificate enrollment)
 
-        ### Gateway Registration Notes
+### Gateway Registration Notes
 
-        - Each defined Certificate Authority in the AnyCA Gateway REST can support one HydrantId API endpoint
-        - If you have multiple HydrantId environments or accounts, you must define multiple Certificate Authorities in the AnyCA Gateway
-        - Each CA configuration will manifest in Command as a separate CA entry
-        - The plugin uses Hawk authentication protocol for all API communications
-        - Authentication uses HMAC-SHA256 for secure API access
-        - The plugin automatically handles:
-          - Policy/template discovery
-          - Certificate status mapping
-          - End-entity certificate extraction from PEM chains
-          - Enrollment completion polling (30-second timeout)
+  - Each defined Certificate Authority in the AnyCA Gateway REST can support one HydrantId API endpoint
+  - If you have multiple HydrantId environments or accounts, you must define multiple Certificate Authorities in the AnyCA Gateway
+  - Each CA configuration will manifest in Command as a separate CA entry
+  - The plugin uses Hawk authentication protocol for all API communications
+  - Authentication uses HMAC-SHA256 for secure API access
+  - The plugin automatically handles:
+    - Policy/template discovery
+    - Certificate status mapping
+    - End-entity certificate extraction from PEM chains
+    - Enrollment completion polling (30-second timeout)
 
-        ### Security Considerations
+### Security Considerations
 
-        1. **Credential Storage**: Store API credentials securely and restrict access to the Gateway configuration
-        2. **Secret Management**: Consider using a secrets management system for AuthKey storage
-        3. **Network Security**: Ensure TLS/SSL is properly configured for all API communications
-        4. **Least Privilege**: Request API credentials with minimal required permissions
-        5. **Audit Logging**: Enable comprehensive logging in both the Gateway and HydrantId for security monitoring
-        6. **Credential Rotation**: Regularly rotate API credentials according to your security policy
+     1. **Credential Storage**: Store API credentials securely and restrict access to the Gateway configuration
+     2. **Secret Management**: Consider using a secrets management system for AuthKey storage
+     3. **Network Security**: Ensure TLS/SSL is properly configured for all API communications
+     4. **Least Privilege**: Request API credentials with minimal required permissions
+     5. **Audit Logging**: Enable comprehensive logging in both the Gateway and HydrantId for security monitoring
+     6. **Credential Rotation**: Regularly rotate API credentials according to your security policy
 
-    * **CA Connection**
+ * **CA Connection**
 
-        Populate using the configuration fields collected in the [requirements](#requirements) section.
+     Populate using the configuration fields collected in the [requirements](#requirements) section.
 
-        * **HydrantIdBaseUrl** - The base URL for the HydrantId API endpoint. For example, `https://acm.hydrantid.com` or `https://acm-stage.hydrantid.com`.
-        * **HydrantIdAuthId** - The API Authentication ID provided by HydrantId for API access.
-        * **HydrantIdAuthKey** - The API Authentication Key (secret) provided by HydrantId for API access.
+     * **HydrantIdBaseUrl** - The base URL for the HydrantId API endpoint. For example, `https://acm.hydrantid.com` or `https://acm-stage.hydrantid.com`.
+     * **HydrantIdAuthId** - The API Authentication ID provided by HydrantId for API access.
+     * **HydrantIdAuthKey** - The API Authentication Key (secret) provided by HydrantId for API access.
 
 2. **Certificate Template Configuration**
 
-    After adding the CA to the Gateway, configure each certificate template:
+ After adding the CA to the Gateway, configure each certificate template:
 
-    1. Navigate to the Templates/Products section for the newly added CA
-    2. For each template (policy) discovered from HydrantId, configure:
-       - **ValidityPeriod**: Select `Days`, `Months`, or `Years`
-       - **ValidityUnits**: Enter the numeric value (e.g., `365` for one year in days)
-       - **RenewalDays**: Enter the renewal window in days (e.g., `30`)
+ 1. Navigate to the Templates/Products section for the newly added CA
+ 2. For each template (policy) discovered from HydrantId, configure:
+    - **ValidityPeriod**: Select `Days`, `Months`, or `Years`
+    - **ValidityUnits**: Enter the numeric value (e.g., `365` for one year in days)
+    - **RenewalDays**: Enter the renewal window in days (e.g., `30`)
 
-    Example configurations:
-    - **1-Year Certificate (Days)**: ValidityPeriod=`Days`, ValidityUnits=`365`, RenewalDays=`30`
-    - **2-Year Certificate (Years)**: ValidityPeriod=`Years`, ValidityUnits=`2`, RenewalDays=`60`
-    - **6-Month Certificate (Months)**: ValidityPeriod=`Months`, ValidityUnits=`6`, RenewalDays=`30`
+ Example configurations:
+ - **1-Year Certificate (Days)**: ValidityPeriod=`Days`, ValidityUnits=`365`, RenewalDays=`30`
+ - **2-Year Certificate (Years)**: ValidityPeriod=`Years`, ValidityUnits=`2`, RenewalDays=`60`
+ - **6-Month Certificate (Months)**: ValidityPeriod=`Months`, ValidityUnits=`6`, RenewalDays=`30`
 
 3. Follow the [official Keyfactor documentation](https://software.keyfactor.com/Guides/AnyCAGatewayREST/Content/AnyCAGatewayREST/AddCA-Keyfactor.htm) to add each defined Certificate Authority to Keyfactor Command and import the newly defined Certificate Templates.
 
