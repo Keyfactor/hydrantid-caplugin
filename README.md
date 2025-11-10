@@ -206,23 +206,6 @@ The plugin supports the following standard CRL revocation reasons:
           | **HydrantIdAuthId** | API Authentication ID provided by HydrantId | Yes | `your-auth-id` |
           | **HydrantIdAuthKey** | API Authentication Key provided by HydrantId | Yes | `your-secret-auth-key` |
 
-        ### Template (Product) Configuration
-
-          Each certificate template (policy) discovered from HydrantId requires configuration for enrollment:
-
-          | Parameter | Description | Required | Example |
-          |-----------|-------------|----------|---------|
-          | **ValidityPeriod** | Time unit for certificate lifetime | Yes | `Days`, `Months`, or `Years` |
-          | **ValidityUnits** | Numeric value for the validity period | Yes | `365` (for 1 year in days), `12` (for 1 year in months), `2` (for 2 years) |
-          | **RenewalDays** | Days before expiration to trigger renewal | Yes | `30` (renew within 30 days of expiration) |
-
-          **Important Notes:**
-          - Template names (Product IDs) are automatically discovered from HydrantId using the GET /api/v2/policies endpoint
-          - The ValidityPeriod and ValidityUnits combine to determine the certificate lifetime
-          - RenewalDays determines the behavior for certificate renewal:
-            - Within window: Performs a renewal operation (maintains certificate lineage)
-            - Outside window: Performs a re-issue operation (new certificate enrollment)
-
         ### Gateway Registration Notes
 
           - Each defined Certificate Authority in the AnyCA Gateway REST can support one HydrantId API endpoint
@@ -278,11 +261,30 @@ The plugin supports the following standard CRL revocation reasons:
         * **HydrantIdAuthId** - The AuthId Obtained from HydrantId. 
         * **HydrantIdAuthKey** - The AuthKey Obtained from HydrantId. 
 
-2. TODO Certificate Template Creation Step is a required section
+2. ### Template (Product) Configuration
+
+      Each certificate template (policy) discovered from HydrantId requires configuration for enrollment:
+
+      | Parameter | Description | Required | Example |
+      |-----------|-------------|----------|---------|
+      | **ValidityPeriod** | Time unit for certificate lifetime | Yes | `Days`, `Months`, or `Years` |
+      | **ValidityUnits** | Numeric value for the validity period | Yes | `365` (for 1 year in days), `12` (for 1 year in months), `2` (for 2 years) |
+      | **RenewalDays** | Days before expiration to trigger renewal | Yes | `30` (renew within 30 days of expiration) |
+
+      **Important Notes:**
+      - Template names (Product IDs) are automatically discovered from HydrantId using the GET /api/v2/policies endpoint
+      - The ValidityPeriod and ValidityUnits combine to determine the certificate lifetime
+      - RenewalDays determines the behavior for certificate renewal:
+        - Within window: Performs a renewal operation (maintains certificate lineage)
+        - Outside window: Performs a re-issue operation (new certificate enrollment)
 
 3. Follow the [official Keyfactor documentation](https://software.keyfactor.com/Guides/AnyCAGatewayREST/Content/AnyCAGatewayREST/AddCA-Keyfactor.htm) to add each defined Certificate Authority to Keyfactor Command and import the newly defined Certificate Templates.
 
-4. TODO Custom Enrollment Parameter Creation Step is an optional section. If this section doesn't seem necessary on initial glance, please delete it. Refer to the docs on [Confluence](https://keyfactor.atlassian.net/wiki/x/SAAyHg) for more info
+4. In Keyfactor Command (v12.3+), for each imported Certificate Template, follow the [official documentation](https://software.keyfactor.com/Core-OnPrem/Current/Content/ReferenceGuide/Configuring%20Template%20Options.htm) to define enrollment fields for each of the following parameters:
+
+    * **ValidityPeriod** - The desired lifetime time period could be Days, Months or Years. 
+    * **ValidityUnits** - The desired lifetime time value some number indicating days, months or years. 
+    * **RenewalDays** - The window that determines whether it is a renewal vs a re-issue. 
 
 
 ## Installation
