@@ -159,23 +159,6 @@ The plugin supports the following standard CRL revocation reasons:
   | **HydrantIdAuthId** | API Authentication ID provided by HydrantId | Yes | `your-auth-id` |
   | **HydrantIdAuthKey** | API Authentication Key provided by HydrantId | Yes | `your-secret-auth-key` |
 
-### Template (Product) Configuration
-
-  Each certificate template (policy) discovered from HydrantId requires configuration for enrollment:
-
-  | Parameter | Description | Required | Example |
-  |-----------|-------------|----------|---------|
-  | **ValidityPeriod** | Time unit for certificate lifetime | Yes | `Days`, `Months`, or `Years` |
-  | **ValidityUnits** | Numeric value for the validity period | Yes | `365` (for 1 year in days), `12` (for 1 year in months), `2` (for 2 years) |
-  | **RenewalDays** | Days before expiration to trigger renewal | Yes | `30` (renew within 30 days of expiration) |
-
-  **Important Notes:**
-  - Template names (Product IDs) are automatically discovered from HydrantId using the GET /api/v2/policies endpoint
-  - The ValidityPeriod and ValidityUnits combine to determine the certificate lifetime
-  - RenewalDays determines the behavior for certificate renewal:
-    - Within window: Performs a renewal operation (maintains certificate lineage)
-    - Outside window: Performs a re-issue operation (new certificate enrollment)
-
 ### Gateway Registration Notes
 
   - Each defined Certificate Authority in the AnyCA Gateway REST can support one HydrantId API endpoint
@@ -225,7 +208,22 @@ The plugin supports the following standard CRL revocation reasons:
 
 ## Certificate Template Creation Step
 
-TODO Certificate Template Creation Step is a required section
+### Template (Product) Configuration
+
+  Each certificate template (policy) discovered from HydrantId requires configuration for enrollment:
+
+  | Parameter | Description | Required | Example |
+  |-----------|-------------|----------|---------|
+  | **ValidityPeriod** | Time unit for certificate lifetime | Yes | `Days`, `Months`, or `Years` |
+  | **ValidityUnits** | Numeric value for the validity period | Yes | `365` (for 1 year in days), `12` (for 1 year in months), `2` (for 2 years) |
+  | **RenewalDays** | Days before expiration to trigger renewal | Yes | `30` (renew within 30 days of expiration) |
+
+  **Important Notes:**
+  - Template names (Product IDs) are automatically discovered from HydrantId using the GET /api/v2/policies endpoint
+  - The ValidityPeriod and ValidityUnits combine to determine the certificate lifetime
+  - RenewalDays determines the behavior for certificate renewal:
+    - Within window: Performs a renewal operation (maintains certificate lineage)
+    - Outside window: Performs a re-issue operation (new certificate enrollment)
 
 ## Custom Enrollment Parameter Creation Step
 
