@@ -225,11 +225,3 @@ The plugin supports the following standard CRL revocation reasons:
     - Within window: Performs a renewal operation (maintains certificate lineage)
     - Outside window: Performs a re-issue operation (new certificate enrollment)
 
-## Custom Enrollment Parameter Creation Step
-
-TODO Custom Enrollment Parameter Creation Step is an optional section. If this section doesn't seem necessary on initial glance, please delete it. Refer to the docs on [Confluence](https://keyfactor.atlassian.net/wiki/x/SAAyHg) for more info
-
-## Mechanics
-
-TODO Mechanics is an optional section. If this section doesn't seem necessary on initial glance, please delete it. Refer to the docs on [Confluence](https://keyfactor.atlassian.net/wiki/x/SAAyHg) for more info
-
