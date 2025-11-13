@@ -1,9 +1,9 @@
 ## Overview
 
-The HID Global HydrantId AnyCA Gateway REST plugin extends the capabilities of HydrantId Certificate Authority Service to Keyfactor Command via the Keyfactor AnyCA Gateway. This plugin leverages the HydrantId REST API with Hawk authentication to provide comprehensive certificate lifecycle management. The plugin represents a fully featured AnyCA Plugin with the following capabilities:
+The HID Global HID AnyCA Gateway REST plugin extends the capabilities of HID Certificate Authority Service to Keyfactor Command via the Keyfactor AnyCA Gateway. This plugin leverages the HID REST API with Hawk authentication to provide comprehensive certificate lifecycle management. The plugin represents a fully featured AnyCA Plugin with the following capabilities:
 
 * **CA Sync**:
-    * Download all certificates issued by the HydrantId CA
+    * Download all certificates issued by the HID CA
     * Support for incremental and full synchronization
     * Automatic extraction of end-entity certificates from PEM chains
 * **Certificate Enrollment**:
@@ -18,18 +18,18 @@ The HID Global HydrantId AnyCA Gateway REST plugin extends the capabilities of H
 
 ## Requirements
 
-### HydrantId System Prerequisites
+### HID System Prerequisites
 
 Before configuring the AnyCA Gateway plugin, ensure the following prerequisites are met:
 
-1. **HydrantId Account**:
-   - Active HydrantId account with API access enabled
-   - Access to the HydrantId management portal
-   - HydrantId Certificate Authority Service configured and operational
+1. **HID Account**:
+   - Active HID account with API access enabled
+   - Access to the HID management portal
+   - HID Certificate Authority Service configured and operational
 
 2. **API Credentials**:
-   - HydrantId API Authentication ID (AuthId)
-   - HydrantId API Authentication Key (AuthKey)
+   - HID API Authentication ID (AuthId)
+   - HID API Authentication Key (AuthKey)
    - These credentials must have permissions for:
      - Certificate enrollment (CSR submission)
      - Certificate retrieval
@@ -37,39 +37,39 @@ Before configuring the AnyCA Gateway plugin, ensure the following prerequisites 
      - Policy/profile listing
 
 3. **Network Connectivity**:
-   - Gateway server must have HTTPS access to the HydrantId API endpoint
-   - Default endpoint format: `https://<environment>.hydrantid.com`
-   - Example: `https://acm-stage.hydrantid.com` or `https://acm.hydrantid.com`
+   - Gateway server must have HTTPS access to the HID API endpoint
+   - Default endpoint format: `https://<environment>.HID.com`
+   - Example: `https://acm-stage.HID.com` or `https://acm.HID.com`
    - TLS 1.2 or higher must be supported
 
 ### Obtaining Required Configuration Information
 
-#### 1. HydrantId Base URL
+#### 1. HID Base URL
 
-The HydrantId Base URL is the root endpoint for the HydrantId API.
+The HID Base URL is the root endpoint for the HID API.
 
-**Common HydrantId environments:**
-- Production: `https://acm.hydrantid.com`
-- Staging: `https://acm-stage.hydrantid.com`
+**Common HID environments:**
+- Production: `https://acm.HID.com`
+- Staging: `https://acm-stage.HID.com`
 - Custom instances may have different URLs
 
 **To obtain your Base URL:**
-1. Contact your HydrantId account representative
-2. Check your HydrantId account documentation
+1. Contact your HID account representative
+2. Check your HID account documentation
 3. Verify the URL is accessible from the Gateway server
 
 #### 2. API Authentication Credentials
 
-The Gateway authenticates to HydrantId using Hawk authentication protocol with an AuthId and AuthKey pair.
+The Gateway authenticates to HID using Hawk authentication protocol with an AuthId and AuthKey pair.
 
 **Steps to obtain API credentials:**
 
-1. **Access HydrantId Portal**:
-   - Log in to your HydrantId management portal
+1. **Access HID Portal**:
+   - Log in to your HID management portal
    - Navigate to API or Integration settings
 
 2. **Generate API Credentials**:
-   - Request API credentials from your HydrantId administrator
+   - Request API credentials from your HID administrator
    - You will receive:
      - **AuthId**: A unique identifier for your API client
      - **AuthKey**: A secret key used for HMAC-based authentication
@@ -85,12 +85,12 @@ The Gateway authenticates to HydrantId using Hawk authentication protocol with a
 
 #### 3. Certificate Policies
 
-Certificate policies define the types of certificates that can be issued. The plugin automatically discovers available policies from the HydrantId system.
+Certificate policies define the types of certificates that can be issued. The plugin automatically discovers available policies from the HID system.
 
 **Policy discovery:**
 - Policies are automatically retrieved when the CA is configured
 - Policies appear in Keyfactor Command as "Product IDs" after CA registration
-- Each policy represents a certificate template configured in HydrantId
+- Each policy represents a certificate template configured in HID
 
 **To view available policies:**
 1. Policies are retrieved automatically using the GET /api/v2/policies endpoint
@@ -115,7 +115,7 @@ For each certificate template, you can configure:
 
 The plugin supports the following standard CRL revocation reasons:
 
-| Reason Code | Reason Name | HydrantId API Value |
+| Reason Code | Reason Name | HID API Value |
 |-------------|-------------|---------------------|
 | 0 | Unspecified | `Unspecified` |
 | 1 | Key Compromise | `KeyCompromise` |
@@ -124,13 +124,13 @@ The plugin supports the following standard CRL revocation reasons:
 | 4 | Superseded | `Superseded` |
 | 5 | Cessation of Operation | `CessationOfOperation` |
 
-**Note**: Verify with your HydrantId administrator which revocation reasons are supported in your environment.
+**Note**: Verify with your HID administrator which revocation reasons are supported in your environment.
 
 ## Installation
 
 1. Install the AnyCA Gateway REST per the [official Keyfactor documentation](https://software.keyfactor.com/Guides/AnyCAGatewayREST/Content/AnyCAGatewayREST/InstallIntroduction.htm).
 
-2. On the server hosting the AnyCA Gateway REST, download and unzip the latest [HID Global HydrantId AnyCA Gateway REST plugin](https://github.com/Keyfactor/hydrantid-caplugin/releases/latest) from GitHub.
+2. On the server hosting the AnyCA Gateway REST, download and unzip the latest [HID Global HID AnyCA Gateway REST plugin](https://github.com/Keyfactor/HID-caplugin/releases/latest) from GitHub.
 
 3. Copy the unzipped directory (usually called `net6.0` or `net8.0`) to the Extensions directory:
 
@@ -140,28 +140,28 @@ The plugin supports the following standard CRL revocation reasons:
     Program Files\Keyfactor\AnyCA Gateway\AnyGatewayREST\net8.0\Extensions
     ```
 
-    > The directory containing the HID Global HydrantId AnyCA Gateway REST plugin DLLs (`net6.0` or `net8.0`) can be named anything, as long as it is unique within the `Extensions` directory.
+    > The directory containing the HID Global HID AnyCA Gateway REST plugin DLLs (`net6.0` or `net8.0`) can be named anything, as long as it is unique within the `Extensions` directory.
 
 4. Restart the AnyCA Gateway REST service.
 
-5. Navigate to the AnyCA Gateway REST portal and verify that the Gateway recognizes the HID Global HydrantId plugin by hovering over the ⓘ symbol to the right of the Gateway on the top left of the portal.
+5. Navigate to the AnyCA Gateway REST portal and verify that the Gateway recognizes the HID Global HID plugin by hovering over the ⓘ symbol to the right of the Gateway on the top left of the portal.
 
 ## Gateway Registration
 
 ### CA Connection Configuration
 
-  When registering the HydrantId CA in the AnyCA Gateway, you'll need to provide the following configuration parameters:
+  When registering the HID CA in the AnyCA Gateway, you'll need to provide the following configuration parameters:
 
   | Parameter | Description | Required | Example |
   |-----------|-------------|----------|---------|
-  | **HydrantIdBaseUrl** | Full URL to the HydrantId API endpoint | Yes | `https://acm.hydrantid.com` or `https://acm-stage.hydrantid.com` |
-  | **HydrantIdAuthId** | API Authentication ID provided by HydrantId | Yes | `your-auth-id` |
-  | **HydrantIdAuthKey** | API Authentication Key provided by HydrantId | Yes | `your-secret-auth-key` |
+  | **HIDBaseUrl** | Full URL to the HID API endpoint | Yes | `https://acm.HID.com` or `https://acm-stage.HID.com` |
+  | **HIDAuthId** | API Authentication ID provided by HID | Yes | `your-auth-id` |
+  | **HIDAuthKey** | API Authentication Key provided by HID | Yes | `your-secret-auth-key` |
 
 ### Gateway Registration Notes
 
-  - Each defined Certificate Authority in the AnyCA Gateway REST can support one HydrantId API endpoint
-  - If you have multiple HydrantId environments or accounts, you must define multiple Certificate Authorities in the AnyCA Gateway
+  - Each defined Certificate Authority in the AnyCA Gateway REST can support one HID API endpoint
+  - If you have multiple HID environments or accounts, you must define multiple Certificate Authorities in the AnyCA Gateway
   - Each CA configuration will manifest in Command as a separate CA entry
   - The plugin uses Hawk authentication protocol for all API communications
   - Authentication uses HMAC-SHA256 for secure API access
@@ -177,23 +177,23 @@ The plugin supports the following standard CRL revocation reasons:
 2. **Secret Management**: Consider using a secrets management system for AuthKey storage
 3. **Network Security**: Ensure TLS/SSL is properly configured for all API communications
 4. **Least Privilege**: Request API credentials with minimal required permissions
-5. **Audit Logging**: Enable comprehensive logging in both the Gateway and HydrantId for security monitoring
+5. **Audit Logging**: Enable comprehensive logging in both the Gateway and HID for security monitoring
 6. **Credential Rotation**: Regularly rotate API credentials according to your security policy
 
 **CA Connection**
 
 Populate using the configuration fields collected in the [requirements](#requirements) section.
 
-* **HydrantIdBaseUrl** - The base URL for the HydrantId API endpoint. For example, `https://acm.hydrantid.com` or `https://acm-stage.hydrantid.com`.
-* **HydrantIdAuthId** - The API Authentication ID provided by HydrantId for API access.
-* **HydrantIdAuthKey** - The API Authentication Key (secret) provided by HydrantId for API access.
+* **HIDBaseUrl** - The base URL for the HID API endpoint. For example, `https://acm.HID.com` or `https://acm-stage.HID.com`.
+* **HIDAuthId** - The API Authentication ID provided by HID for API access.
+* **HIDAuthKey** - The API Authentication Key (secret) provided by HID for API access.
 
 2. **Certificate Template Configuration**
 
  After adding the CA to the Gateway, configure each certificate template:
 
  1. Navigate to the Templates/Products section for the newly added CA
- 2. For each template (policy) discovered from HydrantId, configure:
+ 2. For each template (policy) discovered from HID, configure:
     - **ValidityPeriod**: Select `Days`, `Months`, or `Years`
     - **ValidityUnits**: Enter the numeric value (e.g., `365` for one year in days)
     - **RenewalDays**: Enter the renewal window in days (e.g., `30`)
@@ -209,7 +209,7 @@ Populate using the configuration fields collected in the [requirements](#require
 
 ### Template (Product) Configuration
 
-  Each certificate template (policy) discovered from HydrantId requires configuration for enrollment:
+  Each certificate template (policy) discovered from HID requires configuration for enrollment:
 
   | Parameter | Description | Required | Example |
   |-----------|-------------|----------|---------|
@@ -218,7 +218,7 @@ Populate using the configuration fields collected in the [requirements](#require
   | **RenewalDays** | Days before expiration to trigger renewal | Yes | `30` (renew within 30 days of expiration) |
 
   **Important Notes:**
-  - Template names (Product IDs) are automatically discovered from HydrantId using the GET /api/v2/policies endpoint
+  - Template names (Product IDs) are automatically discovered from HID using the GET /api/v2/policies endpoint
   - The ValidityPeriod and ValidityUnits combine to determine the certificate lifetime
   - RenewalDays determines the behavior for certificate renewal:
     - Within window: Performs a renewal operation (maintains certificate lineage)
