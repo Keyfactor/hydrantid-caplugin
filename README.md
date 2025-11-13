@@ -208,33 +208,33 @@ The plugin supports the following standard CRL revocation reasons:
 
         ### Gateway Registration Notes
 
-          - Each defined Certificate Authority in the AnyCA Gateway REST can support one HydrantId API endpoint
-          - If you have multiple HydrantId environments or accounts, you must define multiple Certificate Authorities in the AnyCA Gateway
-          - Each CA configuration will manifest in Command as a separate CA entry
-          - The plugin uses Hawk authentication protocol for all API communications
-          - Authentication uses HMAC-SHA256 for secure API access
-          - The plugin automatically handles:
-            - Policy/template discovery
-            - Certificate status mapping
-            - End-entity certificate extraction from PEM chains
-            - Enrollment completion polling (30-second timeout)
+        - Each defined Certificate Authority in the AnyCA Gateway REST can support one HydrantId API endpoint
+        - If you have multiple HydrantId environments or accounts, you must define multiple Certificate Authorities in the AnyCA Gateway
+        - Each CA configuration will manifest in Command as a separate CA entry
+        - The plugin uses Hawk authentication protocol for all API communications
+        - Authentication uses HMAC-SHA256 for secure API access
+        - The plugin automatically handles:
+         - Policy/template discovery
+         - Certificate status mapping
+         - End-entity certificate extraction from PEM chains
+         - Enrollment completion polling (30-second timeout)
 
         ### Security Considerations
 
-             1. **Credential Storage**: Store API credentials securely and restrict access to the Gateway configuration
-             2. **Secret Management**: Consider using a secrets management system for AuthKey storage
-             3. **Network Security**: Ensure TLS/SSL is properly configured for all API communications
-             4. **Least Privilege**: Request API credentials with minimal required permissions
-             5. **Audit Logging**: Enable comprehensive logging in both the Gateway and HydrantId for security monitoring
-             6. **Credential Rotation**: Regularly rotate API credentials according to your security policy
+        1. **Credential Storage**: Store API credentials securely and restrict access to the Gateway configuration
+        2. **Secret Management**: Consider using a secrets management system for AuthKey storage
+        3. **Network Security**: Ensure TLS/SSL is properly configured for all API communications
+        4. **Least Privilege**: Request API credentials with minimal required permissions
+        5. **Audit Logging**: Enable comprehensive logging in both the Gateway and HydrantId for security monitoring
+        6. **Credential Rotation**: Regularly rotate API credentials according to your security policy
 
-         * **CA Connection**
+        **CA Connection**
 
-             Populate using the configuration fields collected in the [requirements](#requirements) section.
+        Populate using the configuration fields collected in the [requirements](#requirements) section.
 
-             * **HydrantIdBaseUrl** - The base URL for the HydrantId API endpoint. For example, `https://acm.hydrantid.com` or `https://acm-stage.hydrantid.com`.
-             * **HydrantIdAuthId** - The API Authentication ID provided by HydrantId for API access.
-             * **HydrantIdAuthKey** - The API Authentication Key (secret) provided by HydrantId for API access.
+        * **HydrantIdBaseUrl** - The base URL for the HydrantId API endpoint. For example, `https://acm.hydrantid.com` or `https://acm-stage.hydrantid.com`.
+        * **HydrantIdAuthId** - The API Authentication ID provided by HydrantId for API access.
+        * **HydrantIdAuthKey** - The API Authentication Key (secret) provided by HydrantId for API access.
 
         2. **Certificate Template Configuration**
 
