@@ -198,13 +198,13 @@ The plugin supports the following standard CRL revocation reasons:
 
         ### CA Connection Configuration
 
-          When registering the HydrantId CA in the AnyCA Gateway, you'll need to provide the following configuration parameters:
+        When registering the HydrantId CA in the AnyCA Gateway, you'll need to provide the following configuration parameters:
 
-          | Parameter | Description | Required | Example |
-          |-----------|-------------|----------|---------|
-          | **HydrantIdBaseUrl** | Full URL to the HydrantId API endpoint | Yes | `https://acm.hydrantid.com` or `https://acm-stage.hydrantid.com` |
-          | **HydrantIdAuthId** | API Authentication ID provided by HydrantId | Yes | `your-auth-id` |
-          | **HydrantIdAuthKey** | API Authentication Key provided by HydrantId | Yes | `your-secret-auth-key` |
+        | Parameter | Description | Required | Example |
+        |-----------|-------------|----------|---------|
+        | **HydrantIdBaseUrl** | Full URL to the HydrantId API endpoint | Yes | `https://acm.hydrantid.com` or `https://acm-stage.hydrantid.com` |
+        | **HydrantIdAuthId** | API Authentication ID provided by HydrantId | Yes | `your-auth-id` |
+        | **HydrantIdAuthKey** | API Authentication Key provided by HydrantId | Yes | `your-secret-auth-key` |
 
         ### Gateway Registration Notes
 
@@ -214,10 +214,10 @@ The plugin supports the following standard CRL revocation reasons:
         - The plugin uses Hawk authentication protocol for all API communications
         - Authentication uses HMAC-SHA256 for secure API access
         - The plugin automatically handles:
-         - Policy/template discovery
-         - Certificate status mapping
-         - End-entity certificate extraction from PEM chains
-         - Enrollment completion polling (30-second timeout)
+        - Policy/template discovery
+        - Certificate status mapping
+        - End-entity certificate extraction from PEM chains
+        - Enrollment completion polling (30-second timeout)
 
         ### Security Considerations
 
