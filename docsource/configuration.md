@@ -146,7 +146,6 @@ The plugin supports the following standard CRL revocation reasons:
 
 5. Navigate to the AnyCA Gateway REST portal and verify that the Gateway recognizes the HID Global HydrantId plugin by hovering over the ⓘ symbol to the right of the Gateway on the top left of the portal.
 
-
 ## Gateway Registration
 
 ### CA Connection Configuration
@@ -181,7 +180,7 @@ The plugin supports the following standard CRL revocation reasons:
      5. **Audit Logging**: Enable comprehensive logging in both the Gateway and HydrantId for security monitoring
      6. **Credential Rotation**: Regularly rotate API credentials according to your security policy
 
- * **CA Connection**
+**CA Connection**
 
      Populate using the configuration fields collected in the [requirements](#requirements) section.
 
