@@ -24,6 +24,10 @@
                 {
                     "name": "HydrantIdAuthKey",
                     "description": "The AuthKey Obtained from HydrantId."
+                },
+                {
+                    "name": "Enabled",
+                    "description": "Flag to Enable or Disable the CA connector."
                 }
             ],
             "enrollment_config": [
