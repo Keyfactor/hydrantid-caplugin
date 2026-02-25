@@ -29,6 +29,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
         private RequestManager _requestManager;
         private IAnyCAPluginConfigProvider Config { get; set; }
         private ICertificateDataReader certDataReader;
+        private HydrantIdCAPluginConfig.Config _config;
 
         public void Initialize(IAnyCAPluginConfigProvider configProvider, ICertificateDataReader certificateDataReader)
         {
@@ -37,10 +38,13 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             {
                 certDataReader = certificateDataReader;
                 Config = configProvider;
+                var rawData = JsonConvert.SerializeObject(configProvider.CAConnectionData);
+                _config = JsonConvert.DeserializeObject<HydrantIdCAPluginConfig.Config>(rawData);
+                _logger.LogTrace($"Initialize - Enabled: {_config.Enabled}");
             }
             catch (Exception ex)
             {
-                _logger.LogError($"Failed to initialize GCP CAS CAPlugin: {ex}");
+                _logger.LogError($"Failed to initialize HydrantId CAPlugin: {ex}");
             }
         }
 
@@ -58,23 +62,39 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
 
         public async Task Ping()
         {
-
+            _logger.MethodEntry();
+            if (!_config.Enabled)
+            {
+                _logger.LogWarning($"The CA is currently in the Disabled state. It must be Enabled to perform operations. Skipping connectivity test...");
+                _logger.MethodExit(LogLevel.Trace);
+                return;
+            }
+            _logger.LogDebug("Pinging HydrantId to validate connection");
+            _logger.MethodExit();
         }
 
         public Task ValidateCAConnectionInfo(Dictionary<string, object> connectionInfo)
         {
             _logger.MethodEntry();
-            _logger.LogDebug($"Validating GCP CAS CA Connection properties");
+            _logger.LogDebug($"Validating HydrantId CA Connection properties");
             var rawData = JsonConvert.SerializeObject(connectionInfo);
-            HydrantIdCAPluginConfig.Config config = JsonConvert.DeserializeObject<HydrantIdCAPluginConfig.Config>(rawData);
+            _config = JsonConvert.DeserializeObject<HydrantIdCAPluginConfig.Config>(rawData);
 
-            _logger.LogTrace($"HydrantIdClientFromCAConnectionData - HydrantIdBaseUrl: {config.HydrantIdBaseUrl}");
+            _logger.LogTrace($"HydrantIdClientFromCAConnectionData - HydrantIdBaseUrl: {_config.HydrantIdBaseUrl}");
+            _logger.LogTrace($"HydrantIdClientFromCAConnectionData - Enabled: {_config.Enabled}");
+
+            if (!_config.Enabled)
+            {
+                _logger.LogWarning($"The CA is currently in the Disabled state. It must be Enabled to perform operations. Skipping config validation...");
+                _logger.MethodExit();
+                return Task.CompletedTask;
+            }
 
             List<string> missingFields = new List<string>();
 
-            if (string.IsNullOrEmpty(config.HydrantIdBaseUrl)) missingFields.Add(nameof(config.HydrantIdBaseUrl));
-            if (string.IsNullOrEmpty(config.HydrantIdAuthId)) missingFields.Add(nameof(config.HydrantIdAuthId));
-            if (string.IsNullOrEmpty(config.HydrantIdAuthKey)) missingFields.Add(nameof(config.HydrantIdAuthKey));
+            if (string.IsNullOrEmpty(_config.HydrantIdBaseUrl)) missingFields.Add(nameof(_config.HydrantIdBaseUrl));
+            if (string.IsNullOrEmpty(_config.HydrantIdAuthId)) missingFields.Add(nameof(_config.HydrantIdAuthId));
+            if (string.IsNullOrEmpty(_config.HydrantIdAuthKey)) missingFields.Add(nameof(_config.HydrantIdAuthKey));
 
             if (missingFields.Count > 0)
             {
