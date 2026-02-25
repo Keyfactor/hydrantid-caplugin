@@ -260,6 +260,7 @@ The plugin supports the following standard CRL revocation reasons:
         * **HydrantIdBaseUrl** - The Base URL For the HydrantId Endpoint similar to https://acm-stage.hydrantid.com.  Get this from HydrantId. 
         * **HydrantIdAuthId** - The AuthId Obtained from HydrantId. 
         * **HydrantIdAuthKey** - The AuthKey Obtained from HydrantId. 
+        * **Enabled** - Flag to Enable or Disable the CA connector. 
 
 2. ### Template (Product) Configuration
 

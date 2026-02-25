@@ -28,6 +28,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             public static string HydrantIdAuthId = "HydrantIdAuthId";
             public static string HydrantIdAuthKey = "HydrantIdAuthKey";
             public static string DefaultPageSize = "DefaultPageSize";
+            public static string Enabled = "Enabled";
         }
 
         public class Config
@@ -35,6 +36,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             public string HydrantIdBaseUrl { get; set; }
             public string HydrantIdAuthId { get; set; }
             public string HydrantIdAuthKey { get; set; }
+            public bool Enabled { get; set; }
         }
 
         public static class EnrollmentParametersConstants
@@ -68,6 +70,13 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                     Hidden = true,
                     DefaultValue = "",
                     Type = "Secret"
+                },
+                [ConfigConstants.Enabled] = new PropertyConfigInfo()
+                {
+                    Comments = "Flag to Enable or Disable the CA connector.",
+                    Hidden = false,
+                    DefaultValue = true,
+                    Type = "Bool"
                 }
             };
         }
