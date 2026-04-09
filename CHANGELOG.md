@@ -8,6 +8,7 @@
 * Added per-certificate error isolation in Synchronize to prevent one bad cert from aborting sync
 * Added BlockingCollection.IsAddingCompleted guard before CompleteAdding()
 * Improved error handling in HydrantIdClient - non-success HTTP responses now throw with status details
+* Added .NET 10 target framework support
 
 # v1.0.1
 * SaaS Containerization Fixes, added enabled flag cleaned up some log messages
