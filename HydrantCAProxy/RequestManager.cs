@@ -1,12 +1,12 @@
-// Copyright 2025 Keyfactor                                                   
-// Licensed under the Apache License, Version 2.0 (the "License"); you may    
-// not use this file except in compliance with the License.  You may obtain a 
-// copy of the License at http://www.apache.org/licenses/LICENSE-2.0.  Unless 
-// required by applicable law or agreed to in writing, software distributed   
-// under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES   
-// OR CONDITIONS OF ANY KIND, either express or implied. See the License for  
-// thespecific language governing permissions and limitations under the       
-// License. 
+// Copyright 2025 Keyfactor
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License.  You may obtain a
+// copy of the License at http://www.apache.org/licenses/LICENSE-2.0.  Unless
+// required by applicable law or agreed to in writing, software distributed
+// under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES
+// OR CONDITIONS OF ANY KIND, either express or implied. See the License for
+// thespecific language governing permissions and limitations under the
+// License.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -35,7 +35,8 @@ namespace Keyfactor.HydrantId
             {
                 Log.MethodEntry();
                 int returnStatus;
-                Log.LogTrace($"hydrantIdStatus: {hydrantIdStatus}");
+                Log.LogTrace("GetMapReturnStatus: hydrantIdStatus={Status}", hydrantIdStatus);
+
                 switch (hydrantIdStatus)
                 {
                     case RevocationStatusEnum.Valid:
@@ -45,59 +46,66 @@ namespace Keyfactor.HydrantId
                         returnStatus = (int)EndEntityStatus.INPROCESS;
                         break;
                     case RevocationStatusEnum.Revoked:
-                        returnStatus =(int)EndEntityStatus.REVOKED;
+                        returnStatus = (int)EndEntityStatus.REVOKED;
                         break;
                     case RevocationStatusEnum.Failed:
                         returnStatus = (int)EndEntityStatus.FAILED;
                         break;
                     default:
+                        Log.LogWarning("GetMapReturnStatus: unrecognized status '{Status}', defaulting to FAILED", hydrantIdStatus);
                         returnStatus = (int)EndEntityStatus.FAILED;
                         break;
                 }
+
+                Log.LogTrace("GetMapReturnStatus: {HydrantStatus} -> {MappedStatus}", hydrantIdStatus, returnStatus);
                 Log.MethodExit();
-                return Convert.ToInt32(returnStatus);
+                return returnStatus;
             }
             catch (Exception e)
             {
-                Log.LogError($"Error Occured in RequestManager.GetMapReturnStatus: {e.Message}");
+                Log.LogError(e, "Error occurred in RequestManager.GetMapReturnStatus: {Message}", e.Message);
                 throw;
             }
         }
 
         public RevocationReasons GetMapRevokeReasons(uint keyfactorRevokeReason)
         {
-
             try
             {
-                RevocationReasons returnStatus = RevocationReasons.KeyCompromise;
-                if (keyfactorRevokeReason == 1 | keyfactorRevokeReason == 3 | keyfactorRevokeReason == 4 | keyfactorRevokeReason == 5)
+                Log.MethodEntry();
+                Log.LogTrace("GetMapRevokeReasons: keyfactorRevokeReason={Reason}", keyfactorRevokeReason);
+
+                RevocationReasons returnStatus;
+                switch (keyfactorRevokeReason)
                 {
-
-                    switch (keyfactorRevokeReason)
-                    {
-                        case 1:
-                            returnStatus = RevocationReasons.KeyCompromise;
-                            break;
-                        case 3:
-                            returnStatus = RevocationReasons.AffiliationChanged;
-                            break;
-                        case 4:
-                            returnStatus = RevocationReasons.Superseded;
-                            break;
-                        case 5:
-                            returnStatus = RevocationReasons.CessationOfOperation;
-                            break;
-                    }
-
-                    return returnStatus;
+                    case 1:
+                        returnStatus = RevocationReasons.KeyCompromise;
+                        break;
+                    case 3:
+                        returnStatus = RevocationReasons.AffiliationChanged;
+                        break;
+                    case 4:
+                        returnStatus = RevocationReasons.Superseded;
+                        break;
+                    case 5:
+                        returnStatus = RevocationReasons.CessationOfOperation;
+                        break;
+                    default:
+                        Log.LogError("GetMapRevokeReasons: unsupported revoke reason {Reason}", keyfactorRevokeReason);
+                        throw new RevokeReasonNotSupportedException($"Revoke reason {keyfactorRevokeReason} is not supported. Supported values: 1 (KeyCompromise), 3 (AffiliationChanged), 4 (Superseded), 5 (CessationOfOperation).");
                 }
 
-                throw new RevokeReasonNotSupportedException("This Revoke Reason is not Supported");
-
+                Log.LogTrace("GetMapRevokeReasons: {Input} -> {Mapped}", keyfactorRevokeReason, returnStatus);
+                Log.MethodExit();
+                return returnStatus;
+            }
+            catch (RevokeReasonNotSupportedException)
+            {
+                throw;
             }
             catch (Exception e)
             {
-                Log.LogError($"Error Occured in RequestManager.GetMapRevokeReasons: {e.Message}");
+                Log.LogError(e, "Error occurred in RequestManager.GetMapRevokeReasons: {Message}", e.Message);
                 throw;
             }
         }
@@ -107,15 +115,15 @@ namespace Keyfactor.HydrantId
             try
             {
                 Log.MethodEntry();
+                Log.LogTrace("GetRevokeRequest: reason={Reason}", reason);
                 return new RevokeCertificateReason
                 {
                     Reason = reason
                 };
             }
-
             catch (Exception e)
             {
-                Log.LogError($"Error Occured in RequestManager.GetRevokeRequest: {e.Message}");
+                Log.LogError(e, "Error occurred in RequestManager.GetRevokeRequest: {Message}", e.Message);
                 throw;
             }
         }
@@ -125,6 +133,7 @@ namespace Keyfactor.HydrantId
             try
             {
                 Log.MethodEntry();
+                Log.LogTrace("GetCertificatesListRequest: offset={Offset}, limit={Limit}", offset, limit);
                 return new CertificatesPayload
                 {
                     Limit = limit,
@@ -135,7 +144,7 @@ namespace Keyfactor.HydrantId
             }
             catch (Exception e)
             {
-                Log.LogError($"Error Occured in RequestManager.GetCertificatesListRequest: {e.Message}");
+                Log.LogError(e, "Error occurred in RequestManager.GetCertificatesListRequest: {Message}", e.Message);
                 throw;
             }
         }
@@ -143,6 +152,20 @@ namespace Keyfactor.HydrantId
         public CertRequestBody GetEnrollmentRequest(Guid? policyId, EnrollmentProductInfo productInfo, string csr, Dictionary<string, string[]> san)
         {
             Log.MethodEntry();
+            Log.LogTrace("GetEnrollmentRequest: policyId={PolicyId}, productID='{ProductId}', csr length={CsrLen}",
+                policyId?.ToString() ?? "(null)", productInfo?.ProductID ?? "(null)", csr?.Length ?? 0);
+
+            if (productInfo == null)
+                throw new ArgumentNullException(nameof(productInfo), "productInfo cannot be null.");
+            if (productInfo.ProductParameters == null)
+                throw new ArgumentNullException(nameof(productInfo), "productInfo.ProductParameters cannot be null.");
+            if (string.IsNullOrEmpty(csr))
+                throw new ArgumentNullException(nameof(csr), "CSR cannot be null or empty.");
+
+            if (!productInfo.ProductParameters.ContainsKey("ValidityPeriod"))
+                throw new ArgumentException("ValidityPeriod is required in ProductParameters.", nameof(productInfo));
+            if (!productInfo.ProductParameters.ContainsKey("ValidityUnits"))
+                throw new ArgumentException("ValidityUnits is required in ProductParameters.", nameof(productInfo));
 
             var request = new CertRequestBody
             {
@@ -152,11 +175,12 @@ namespace Keyfactor.HydrantId
                 Validity = GetValidity(productInfo.ProductParameters["ValidityPeriod"], Convert.ToInt16(productInfo.ProductParameters["ValidityUnits"]))
             };
 
-            if (san!= null && san?.Count>0)
+            if (san != null && san.Count > 0)
             {
                 request.SubjectAltNames = GetSansRequest(san);
             }
 
+            Log.MethodExit();
             return request;
         }
 
@@ -166,6 +190,11 @@ namespace Keyfactor.HydrantId
             try
             {
                 Log.MethodEntry();
+                Log.LogTrace("GetRenewalRequest: csr length={CsrLen}, reuseCsr={ReuseCsr}", csr?.Length ?? 0, reuseCsr);
+
+                if (string.IsNullOrEmpty(csr) && !reuseCsr)
+                    throw new ArgumentNullException(nameof(csr), "CSR cannot be null or empty when reuseCsr is false.");
+
                 return new RenewalRequest
                 {
                     Csr = csr,
@@ -174,7 +203,7 @@ namespace Keyfactor.HydrantId
             }
             catch (Exception e)
             {
-                Log.LogError($"Error Occured in RequestManager.GetRenewalRequest: {e.Message}");
+                Log.LogError(e, "Error occurred in RequestManager.GetRenewalRequest: {Message}", e.Message);
                 throw;
             }
         }
@@ -184,6 +213,11 @@ namespace Keyfactor.HydrantId
             try
             {
                 Log.MethodEntry();
+                Log.LogTrace("GetValidity: period='{Period}', units={Units}", period ?? "(null)", units);
+
+                if (string.IsNullOrEmpty(period))
+                    throw new ArgumentNullException(nameof(period), "Validity period cannot be null or empty.");
+
                 CertRequestBodyValidity validity = new CertRequestBodyValidity();
                 switch (period)
                 {
@@ -196,13 +230,16 @@ namespace Keyfactor.HydrantId
                     case "Days":
                         validity.Days = units;
                         break;
+                    default:
+                        Log.LogWarning("GetValidity: unrecognized period '{Period}', no validity set", period);
+                        break;
                 }
 
                 return validity;
             }
             catch (Exception e)
             {
-                Log.LogError($"Error Occured in RequestManager.GetValidity: {e.Message}");
+                Log.LogError(e, "Error occurred in RequestManager.GetValidity: {Message}", e.Message);
                 throw;
             }
         }
@@ -212,71 +249,101 @@ namespace Keyfactor.HydrantId
             try
             {
                 Log.MethodEntry();
+                Log.LogTrace("GetSansRequest: sans is {Null}, count={Count}",
+                    sans == null ? "NULL" : "present", sans?.Count ?? 0);
+
+                if (sans == null)
+                    return new CertRequestBodySubjectAltNames();
+
                 var san = new CertRequestBodySubjectAltNames();
 
                 if (sans.TryGetValue("dnsname", out var dnsNames))
-                    san.Dnsname = dnsNames.ToList();
+                {
+                    san.Dnsname = dnsNames?.ToList() ?? new List<string>();
+                    Log.LogTrace("GetSansRequest: dnsname count={Count}", san.Dnsname.Count);
+                }
 
                 if (sans.TryGetValue("ipaddress", out var ipAddresses))
-                    san.Ipaddress = ipAddresses.ToList();
+                {
+                    san.Ipaddress = ipAddresses?.ToList() ?? new List<string>();
+                    Log.LogTrace("GetSansRequest: ipaddress count={Count}", san.Ipaddress.Count);
+                }
 
                 if (sans.TryGetValue("rfc822name", out var rfcNames))
-                    san.Rfc822Name = rfcNames.ToList();
+                {
+                    san.Rfc822Name = rfcNames?.ToList() ?? new List<string>();
+                    Log.LogTrace("GetSansRequest: rfc822name count={Count}", san.Rfc822Name.Count);
+                }
 
                 if (sans.TryGetValue("upn", out var upns))
-                    san.Upn = upns.ToList();
+                {
+                    san.Upn = upns?.ToList() ?? new List<string>();
+                    Log.LogTrace("GetSansRequest: upn count={Count}", san.Upn.Count);
+                }
 
                 return san;
             }
             catch (Exception e)
             {
-                Log.LogError($"Error occurred in RequestManager.GetSansRequest: {e.Message}");
+                Log.LogError(e, "Error occurred in RequestManager.GetSansRequest: {Message}", e.Message);
                 throw;
             }
         }
 
 
-        public EnrollmentResult
-            GetEnrollmentResult(
-                ICertificate enrollmentResult, AnyCAPluginCertificate cert)
+        public EnrollmentResult GetEnrollmentResult(ICertificate enrollmentResult, AnyCAPluginCertificate cert)
         {
             try
             {
                 Log.MethodEntry();
+                Log.LogTrace("GetEnrollmentResult: enrollmentResult is {Null}, cert is {CertNull}",
+                    enrollmentResult == null ? "NULL" : "present",
+                    cert == null ? "NULL" : "present");
+
                 if (enrollmentResult == null)
                 {
+                    Log.LogError("GetEnrollmentResult: enrollmentResult is null.");
                     return new EnrollmentResult
                     {
-                        Status = (int)EndEntityStatus.FAILED, //failure
-                        StatusMessage = $"Enrollment Failed with could not get the certificate from the request tracking id"
+                        Status = (int)EndEntityStatus.FAILED,
+                        StatusMessage = "Enrollment failed: could not get the certificate from the request tracking id."
                     };
                 }
 
                 if (!enrollmentResult.Id.HasValue)
                 {
+                    Log.LogError("GetEnrollmentResult: enrollmentResult.Id has no value.");
                     return new EnrollmentResult
                     {
-                        Status = (int)EndEntityStatus.FAILED, //failure
-                        StatusMessage = $"Enrollment Failed with could not get the certificate from the request tracking id"
+                        Status = (int)EndEntityStatus.FAILED,
+                        StatusMessage = "Enrollment failed: certificate response has no ID."
                     };
                 }
 
-                if (enrollmentResult.Id.HasValue)
+                if (cert == null || string.IsNullOrEmpty(cert.Certificate))
                 {
+                    Log.LogWarning("GetEnrollmentResult: cert is null or has empty Certificate for ID={Id}", enrollmentResult.Id);
                     return new EnrollmentResult
                     {
-                        Status = (int)EndEntityStatus.GENERATED, //success
-                        CARequestID = enrollmentResult.Id.ToString(),
-                        Certificate = cert.Certificate,
-                        StatusMessage = $"Order Successfully Created"
+                        Status = (int)EndEntityStatus.FAILED,
+                        StatusMessage = "Enrollment failed: could not retrieve certificate content."
                     };
                 }
 
-                return null;
+                Log.LogTrace("GetEnrollmentResult: success - ID={Id}, certificate length={Len}",
+                    enrollmentResult.Id, cert.Certificate?.Length ?? 0);
+
+                return new EnrollmentResult
+                {
+                    Status = (int)EndEntityStatus.GENERATED,
+                    CARequestID = enrollmentResult.Id.ToString(),
+                    Certificate = cert.Certificate,
+                    StatusMessage = "Order Successfully Created"
+                };
             }
             catch (Exception e)
             {
-                Log.LogError($"Error Occured in RequestManager.GetEnrollmentResult: {e.Message}");
+                Log.LogError(e, "Error occurred in RequestManager.GetEnrollmentResult: {Message}", e.Message);
                 throw;
             }
         }
@@ -289,6 +356,11 @@ namespace Keyfactor.HydrantId
             try
             {
                 Log.MethodEntry();
+                Log.LogTrace("GetDnComponentsRequest: csr length={CsrLen}", csr?.Length ?? 0);
+
+                if (string.IsNullOrEmpty(csr))
+                    throw new ArgumentNullException(nameof(csr), "CSR cannot be null or empty.");
+
                 var c = String.Empty;
                 var o = String.Empty;
                 var cn = string.Empty;
@@ -296,46 +368,68 @@ namespace Keyfactor.HydrantId
                 var st = string.Empty;
                 var ou = string.Empty;
 
-                Log.LogTrace($"CSR: {csr}");
-                //var cert = "-----BEGIN CERTIFICATE REQUEST-----\r\n";
-                var cert =  csr;
-                //cert = cert + "\r\n-----END CERTIFICATE REQUEST-----";
-                Log.LogTrace($"cert: {cert}");
+                var cert = csr;
+                Log.LogTrace("GetDnComponentsRequest: parsing CSR");
 
                 var reader = new PemReader(new StringReader(cert));
-                if (reader.ReadObject() is Pkcs10CertificationRequest req)
+                var pemObject = reader.ReadObject();
+                if (pemObject == null)
+                {
+                    Log.LogWarning("GetDnComponentsRequest: PemReader returned null object");
+                    return new CertRequestBodyDnComponents { Cn = cn, Ou = new List<string> { ou }, O = o, L = l, St = st, C = c };
+                }
+
+                if (pemObject is Pkcs10CertificationRequest req)
                 {
                     var info = req.GetCertificationRequestInfo();
-                    Log.LogTrace($"subject: {info.Subject}");
+                    Log.LogTrace("GetDnComponentsRequest: subject='{Subject}'", info?.Subject?.ToString() ?? "(null)");
 
-                    var array1 = info.Subject.ToString().Split(',');
-                    foreach (var x in array1)
+                    if (info?.Subject != null)
                     {
-                        var itemArray = x.Split('=');
-
-                        switch (itemArray[0].ToUpper())
+                        var array1 = info.Subject.ToString().Split(',');
+                        foreach (var x in array1)
                         {
-                            case "C":
-                                c = itemArray[1];
-                                break;
-                            case "O":
-                                o = itemArray[1];
-                                break;
-                            case "CN":
-                                cn = itemArray[1];
-                                break;
-                            case "OU":
-                                ou = itemArray[1];
-                                break;
-                            case "ST":
-                                st = itemArray[1];
-                                break;
-                            case "L":
-                                l = itemArray[1];
-                                break;
+                            if (string.IsNullOrWhiteSpace(x))
+                                continue;
+
+                            var itemArray = x.Split('=');
+                            if (itemArray.Length < 2)
+                            {
+                                Log.LogTrace("GetDnComponentsRequest: skipping malformed DN component '{Component}'", x);
+                                continue;
+                            }
+
+                            switch (itemArray[0].Trim().ToUpper())
+                            {
+                                case "C":
+                                    c = itemArray[1].Trim();
+                                    break;
+                                case "O":
+                                    o = itemArray[1].Trim();
+                                    break;
+                                case "CN":
+                                    cn = itemArray[1].Trim();
+                                    break;
+                                case "OU":
+                                    ou = itemArray[1].Trim();
+                                    break;
+                                case "ST":
+                                    st = itemArray[1].Trim();
+                                    break;
+                                case "L":
+                                    l = itemArray[1].Trim();
+                                    break;
+                            }
                         }
                     }
                 }
+                else
+                {
+                    Log.LogWarning("GetDnComponentsRequest: PEM object is not a PKCS10 request, type={Type}", pemObject.GetType().Name);
+                }
+
+                Log.LogTrace("GetDnComponentsRequest: CN='{Cn}', O='{O}', OU='{Ou}', C='{C}', ST='{St}', L='{L}'",
+                    cn, o, ou, c, st, l);
 
                 return new CertRequestBodyDnComponents
                 {
@@ -349,10 +443,9 @@ namespace Keyfactor.HydrantId
             }
             catch (Exception e)
             {
-                Log.LogError($"Error Occured in RequestManager.GetDnComponentsRequest: {e.Message}");
+                Log.LogError(e, "Error occurred in RequestManager.GetDnComponentsRequest: {Message}", e.Message);
                 throw;
             }
         }
     }
 }
-
