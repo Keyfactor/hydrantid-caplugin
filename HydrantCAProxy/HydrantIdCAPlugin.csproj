@@ -1,6 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 	<PropertyGroup>
-		<TargetFrameworks>net6.0;net8.0</TargetFrameworks>
+		<TargetFrameworks>net6.0;net8.0;net10.0</TargetFrameworks>
 		<ImplicitUsings>disable</ImplicitUsings>
 		<CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
 		<GenerateAssemblyInfo>false</GenerateAssemblyInfo>
@@ -12,6 +12,8 @@
         <PackageReference Include="Keyfactor.Logging" Version="1.1.1" />
         <PackageReference Include="Keyfactor.PKI" Version="5.5.0" />
         <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+        <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
+        <PackageReference Include="System.Drawing.Common" Version="8.0.25" />
 	</ItemGroup>
 	<ItemGroup>
 		<None Update="manifest.json">
