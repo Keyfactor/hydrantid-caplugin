@@ -27,13 +27,13 @@ namespace Keyfactor.HydrantId
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _flowName = flowName ?? "Unknown";
             _stopwatch = Stopwatch.StartNew();
-            _logger.LogDebug("===== FLOW START: {FlowName} =====", _flowName);
+            _logger.LogTrace("===== FLOW START: {FlowName} =====", _flowName);
         }
 
         public void Step(string name, string detail = null)
         {
             _steps.Add(new FlowStep(name, FlowStepStatus.Ok, detail));
-            _logger.LogDebug("[FLOW] {FlowName} -> {StepName}: {Detail}", _flowName, name, detail ?? "OK");
+            _logger.LogTrace("[FLOW] {FlowName} -> {StepName}: {Detail}", _flowName, name, detail ?? "OK");
         }
 
         public void Step(string name, Action action)
@@ -44,13 +44,13 @@ namespace Keyfactor.HydrantId
                 action();
                 sw.Stop();
                 _steps.Add(new FlowStep(name, FlowStepStatus.Ok, $"{sw.ElapsedMilliseconds}ms"));
-                _logger.LogDebug("[FLOW] {FlowName} -> {StepName}: OK ({Elapsed}ms)", _flowName, name, sw.ElapsedMilliseconds);
+                _logger.LogTrace("[FLOW] {FlowName} -> {StepName}: OK ({Elapsed}ms)", _flowName, name, sw.ElapsedMilliseconds);
             }
             catch (Exception ex)
             {
                 sw.Stop();
                 _steps.Add(new FlowStep(name, FlowStepStatus.Failed, ex.Message));
-                _logger.LogWarning("[FLOW] {FlowName} -> {StepName}: FAILED - {Error}", _flowName, name, ex.Message);
+                _logger.LogTrace("[FLOW] {FlowName} -> {StepName}: FAILED - {Error}", _flowName, name, ex.Message);
                 throw;
             }
         }
@@ -63,13 +63,13 @@ namespace Keyfactor.HydrantId
                 await action();
                 sw.Stop();
                 _steps.Add(new FlowStep(name, FlowStepStatus.Ok, $"{sw.ElapsedMilliseconds}ms"));
-                _logger.LogDebug("[FLOW] {FlowName} -> {StepName}: OK ({Elapsed}ms)", _flowName, name, sw.ElapsedMilliseconds);
+                _logger.LogTrace("[FLOW] {FlowName} -> {StepName}: OK ({Elapsed}ms)", _flowName, name, sw.ElapsedMilliseconds);
             }
             catch (Exception ex)
             {
                 sw.Stop();
                 _steps.Add(new FlowStep(name, FlowStepStatus.Failed, ex.Message));
-                _logger.LogWarning("[FLOW] {FlowName} -> {StepName}: FAILED - {Error}", _flowName, name, ex.Message);
+                _logger.LogTrace("[FLOW] {FlowName} -> {StepName}: FAILED - {Error}", _flowName, name, ex.Message);
                 throw;
             }
         }
@@ -77,13 +77,13 @@ namespace Keyfactor.HydrantId
         public void Fail(string name, string reason)
         {
             _steps.Add(new FlowStep(name, FlowStepStatus.Failed, reason));
-            _logger.LogWarning("[FLOW] {FlowName} -> {StepName}: FAILED - {Reason}", _flowName, name, reason);
+            _logger.LogTrace("[FLOW] {FlowName} -> {StepName}: FAILED - {Reason}", _flowName, name, reason);
         }
 
         public void Skip(string name, string reason)
         {
             _steps.Add(new FlowStep(name, FlowStepStatus.Skipped, reason));
-            _logger.LogDebug("[FLOW] {FlowName} -> {StepName}: SKIPPED - {Reason}", _flowName, name, reason);
+            _logger.LogTrace("[FLOW] {FlowName} -> {StepName}: SKIPPED - {Reason}", _flowName, name, reason);
         }
 
         public void Dispose()
@@ -91,7 +91,7 @@ namespace Keyfactor.HydrantId
             _stopwatch.Stop();
             var hasFailure = false;
 
-            _logger.LogDebug("===== FLOW DIAGRAM: {FlowName} =====", _flowName);
+            _logger.LogTrace("===== FLOW DIAGRAM: {FlowName} =====", _flowName);
             foreach (var step in _steps)
             {
                 string icon;
@@ -113,12 +113,12 @@ namespace Keyfactor.HydrantId
                 }
 
                 var detail = string.IsNullOrEmpty(step.Detail) ? "" : $" ({step.Detail})";
-                _logger.LogDebug("  | {Icon} {StepName}{Detail}", icon, step.Name, detail);
-                _logger.LogDebug("  v");
+                _logger.LogTrace("  | {Icon} {StepName}{Detail}", icon, step.Name, detail);
+                _logger.LogTrace("  v");
             }
 
             var result = hasFailure ? "PARTIAL FAILURE" : "SUCCESS";
-            _logger.LogDebug("===== FLOW RESULT: {Result} ({Elapsed}ms) =====", result, _stopwatch.ElapsedMilliseconds);
+            _logger.LogTrace("===== FLOW RESULT: {Result} ({Elapsed}ms) =====", result, _stopwatch.ElapsedMilliseconds);
         }
 
         private enum FlowStepStatus
