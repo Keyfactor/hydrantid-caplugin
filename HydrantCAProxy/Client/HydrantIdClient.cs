@@ -1,12 +1,12 @@
-// Copyright 2025 Keyfactor                                                   
-// Licensed under the Apache License, Version 2.0 (the "License"); you may    
-// not use this file except in compliance with the License.  You may obtain a 
-// copy of the License at http://www.apache.org/licenses/LICENSE-2.0.  Unless 
-// required by applicable law or agreed to in writing, software distributed   
-// under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES   
-// OR CONDITIONS OF ANY KIND, either express or implied. See the License for  
-// thespecific language governing permissions and limitations under the       
-// License. 
+// Copyright 2025 Keyfactor
+// Licensed under the Apache License, Version 2.0 (the "License"); you may
+// not use this file except in compliance with the License.  You may obtain a
+// copy of the License at http://www.apache.org/licenses/LICENSE-2.0.  Unless
+// required by applicable law or agreed to in writing, software distributed
+// under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES
+// OR CONDITIONS OF ANY KIND, either express or implied. See the License for
+// thespecific language governing permissions and limitations under the
+// License.
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -34,24 +34,43 @@ namespace Keyfactor.HydrantId.Client
 {
     public sealed class HydrantIdClient
     {
-        private static readonly ILogger Log = LogHandler.GetClassLogger < HydrantIdClient>();
+        private static readonly ILogger Log = LogHandler.GetClassLogger<HydrantIdClient>();
 
         public HydrantIdClient(IAnyCAPluginConfigProvider config)
         {
             try
             {
                 Log.MethodEntry();
-                
+
+                if (config == null)
+                    throw new ArgumentNullException(nameof(config), "config cannot be null.");
+                if (config.CAConnectionData == null)
+                    throw new ArgumentNullException(nameof(config), "CAConnectionData cannot be null.");
+
                 if (config.CAConnectionData.ContainsKey(HydrantIdCAPluginConfig.ConfigConstants.HydrantIdAuthId))
                 {
                     ConfigProvider = config;
-                    BaseUrl = ConfigProvider.CAConnectionData[HydrantIdCAPluginConfig.ConfigConstants.HydrantIdBaseUrl].ToString();
+                    var baseUrlObj = ConfigProvider.CAConnectionData[HydrantIdCAPluginConfig.ConfigConstants.HydrantIdBaseUrl];
+                    BaseUrl = baseUrlObj?.ToString();
+
+                    if (string.IsNullOrEmpty(BaseUrl))
+                    {
+                        Log.LogError("HydrantIdClient: BaseUrl is null or empty after reading config.");
+                        throw new InvalidOperationException("HydrantIdBaseUrl is null or empty in CAConnectionData.");
+                    }
+
+                    Log.LogTrace("HydrantIdClient: BaseUrl='{BaseUrl}'", BaseUrl);
                     RequestManager = new RequestManager();
+                }
+                else
+                {
+                    Log.LogError("HydrantIdClient: HydrantIdAuthId key not found in CAConnectionData.");
+                    throw new InvalidOperationException("HydrantIdAuthId not found in CAConnectionData.");
                 }
             }
             catch (Exception e)
             {
-                Log.LogError($"Error Occured in HydrantIdClient.HydrantIdClient: {e.Message}");
+                Log.LogError(e, "Error occurred in HydrantIdClient constructor: {Message}", e.Message);
                 throw;
             }
         }
@@ -66,66 +85,111 @@ namespace Keyfactor.HydrantId.Client
         public async Task<CertRequestResult> GetSubmitEnrollmentAsync(CertRequestBody registerRequest)
         {
             Log.MethodEntry();
+            Log.LogTrace("GetSubmitEnrollmentAsync: registerRequest is {Null}", registerRequest == null ? "NULL" : "present");
+
+            if (registerRequest == null)
+                throw new ArgumentNullException(nameof(registerRequest), "registerRequest cannot be null.");
+
             var apiEndpoint = "/api/v2/csr";
-            var restClient = ConfigureRestClient("post", BaseUrl + apiEndpoint);
-            Log.LogTrace($"API Url {BaseUrl + apiEndpoint}");
+            var fullUrl = BaseUrl + apiEndpoint;
+            Log.LogTrace("GetSubmitEnrollmentAsync: API Url={Url}", fullUrl);
 
             var json = JsonConvert.SerializeObject(registerRequest);
-            Log.LogTrace($"Register Request JSON: {json}");
+            Log.LogTrace("GetSubmitEnrollmentAsync: request JSON: {Json}", json);
 
-            var traceWriter = new MemoryTraceWriter();
-            var settings = new JsonSerializerSettings
+            var settings = new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore };
+
+            try
             {
-                NullValueHandling = NullValueHandling.Ignore,
-                TraceWriter = traceWriter
-            };
+                var restClient = ConfigureRestClient("post", fullUrl);
+                using var resp = await restClient.PostAsync(apiEndpoint, new StringContent(json, Encoding.UTF8, "application/json"));
+                var responseContent = await resp.Content.ReadAsStringAsync();
 
-            using var resp = await restClient.PostAsync(apiEndpoint, new StringContent(json, Encoding.UTF8, "application/json"));
-            var responseContent = await resp.Content.ReadAsStringAsync();
+                Log.LogTrace("GetSubmitEnrollmentAsync: HTTP status={StatusCode}, response length={Len}",
+                    resp.StatusCode, responseContent?.Length ?? 0);
 
-            if (resp.StatusCode == HttpStatusCode.InternalServerError)
-            {
-                var errorResponse = JsonConvert.DeserializeObject<ErrorReturn>(responseContent, settings);
-                Log.LogError($"Error Response JSON: {JsonConvert.SerializeObject(errorResponse)}");
-                return new CertRequestResult { ErrorReturn = errorResponse };
+                if (resp.StatusCode == HttpStatusCode.InternalServerError)
+                {
+                    var errorResponse = JsonConvert.DeserializeObject<ErrorReturn>(responseContent, settings);
+                    Log.LogError("GetSubmitEnrollmentAsync: server error response: {Json}", JsonConvert.SerializeObject(errorResponse));
+                    return new CertRequestResult { ErrorReturn = errorResponse };
+                }
+
+                if (!resp.IsSuccessStatusCode)
+                {
+                    Log.LogError("GetSubmitEnrollmentAsync: unexpected status {StatusCode}: {Response}", resp.StatusCode, responseContent);
+                    return new CertRequestResult
+                    {
+                        ErrorReturn = new ErrorReturn { Status = "Failure", Error = $"HTTP {resp.StatusCode}: {responseContent}" }
+                    };
+                }
+
+                var validResponse = JsonConvert.DeserializeObject<CertRequestStatus>(responseContent, settings);
+                Log.LogTrace("GetSubmitEnrollmentAsync: valid response JSON: {Json}", JsonConvert.SerializeObject(validResponse));
+                return new CertRequestResult { RequestStatus = validResponse };
             }
-
-            var validResponse = JsonConvert.DeserializeObject<CertRequestStatus>(responseContent, settings);
-            Log.LogTrace($"Valid Response JSON: {JsonConvert.SerializeObject(validResponse)}");
-            return new CertRequestResult { RequestStatus = validResponse };
+            catch (Exception e)
+            {
+                Log.LogError(e, "GetSubmitEnrollmentAsync: exception: {Message}", e.Message);
+                throw;
+            }
         }
 
 
         public async Task<CertRequestResult> GetSubmitRenewalAsync(string certificateId, RenewalRequest renewRequest)
         {
             Log.MethodEntry();
+            Log.LogTrace("GetSubmitRenewalAsync: certificateId='{CertId}', renewRequest is {Null}",
+                certificateId ?? "(null)", renewRequest == null ? "NULL" : "present");
+
+            if (string.IsNullOrEmpty(certificateId))
+                throw new ArgumentNullException(nameof(certificateId), "certificateId cannot be null or empty.");
+            if (renewRequest == null)
+                throw new ArgumentNullException(nameof(renewRequest), "renewRequest cannot be null.");
+
             var apiEndpoint = $"/api/v2/certificates/{certificateId}/renew";
-            var restClient = ConfigureRestClient("post", BaseUrl + apiEndpoint);
-            Log.LogTrace($"API Url {BaseUrl + apiEndpoint}");
+            var fullUrl = BaseUrl + apiEndpoint;
+            Log.LogTrace("GetSubmitRenewalAsync: API Url={Url}", fullUrl);
 
             var json = JsonConvert.SerializeObject(renewRequest);
-            Log.LogTrace($"Renew Request JSON: {json}");
+            Log.LogTrace("GetSubmitRenewalAsync: request JSON: {Json}", json);
 
-            var traceWriter = new MemoryTraceWriter();
-            var settings = new JsonSerializerSettings
+            var settings = new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore };
+
+            try
             {
-                NullValueHandling = NullValueHandling.Ignore,
-                TraceWriter = traceWriter
-            };
+                var restClient = ConfigureRestClient("post", fullUrl);
+                using var resp = await restClient.PostAsync(apiEndpoint, new StringContent(json, Encoding.UTF8, "application/json"));
+                var responseContent = await resp.Content.ReadAsStringAsync();
 
-            using var resp = await restClient.PostAsync(apiEndpoint, new StringContent(json, Encoding.UTF8, "application/json"));
-            var responseContent = await resp.Content.ReadAsStringAsync();
+                Log.LogTrace("GetSubmitRenewalAsync: HTTP status={StatusCode}, response length={Len}",
+                    resp.StatusCode, responseContent?.Length ?? 0);
 
-            if (resp.StatusCode == HttpStatusCode.InternalServerError)
-            {
-                var errorResponse = JsonConvert.DeserializeObject<ErrorReturn>(responseContent, settings);
-                Log.LogError($"Error Response JSON: {JsonConvert.SerializeObject(errorResponse)}");
-                return new CertRequestResult { ErrorReturn = errorResponse };
+                if (resp.StatusCode == HttpStatusCode.InternalServerError)
+                {
+                    var errorResponse = JsonConvert.DeserializeObject<ErrorReturn>(responseContent, settings);
+                    Log.LogError("GetSubmitRenewalAsync: server error response: {Json}", JsonConvert.SerializeObject(errorResponse));
+                    return new CertRequestResult { ErrorReturn = errorResponse };
+                }
+
+                if (!resp.IsSuccessStatusCode)
+                {
+                    Log.LogError("GetSubmitRenewalAsync: unexpected status {StatusCode}: {Response}", resp.StatusCode, responseContent);
+                    return new CertRequestResult
+                    {
+                        ErrorReturn = new ErrorReturn { Status = "Failure", Error = $"HTTP {resp.StatusCode}: {responseContent}" }
+                    };
+                }
+
+                var validResponse = JsonConvert.DeserializeObject<CertRequestStatus>(responseContent, settings);
+                Log.LogTrace("GetSubmitRenewalAsync: valid response JSON: {Json}", JsonConvert.SerializeObject(validResponse));
+                return new CertRequestResult { RequestStatus = validResponse };
             }
-
-            var validResponse = JsonConvert.DeserializeObject<CertRequestStatus>(responseContent, settings);
-            Log.LogTrace($"Valid Response JSON: {JsonConvert.SerializeObject(validResponse)}");
-            return new CertRequestResult { RequestStatus = validResponse };
+            catch (Exception e)
+            {
+                Log.LogError(e, "GetSubmitRenewalAsync: exception: {Message}", e.Message);
+                throw;
+            }
         }
 
 
@@ -134,22 +198,42 @@ namespace Keyfactor.HydrantId.Client
         {
             Log.MethodEntry();
             var apiEndpoint = "/api/v2/policies";
-            var restClient = ConfigureRestClient("get", BaseUrl + apiEndpoint);
-            Log.LogTrace($"API Url {BaseUrl + apiEndpoint}");
+            var fullUrl = BaseUrl + apiEndpoint;
+            Log.LogTrace("GetPolicyList: API Url={Url}", fullUrl);
 
-            var traceWriter = new MemoryTraceWriter();
-            var settings = new JsonSerializerSettings
+            var settings = new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore };
+
+            try
             {
-                NullValueHandling = NullValueHandling.Ignore,
-                TraceWriter = traceWriter
-            };
+                var restClient = ConfigureRestClient("get", fullUrl);
+                using var resp = await restClient.GetAsync(apiEndpoint);
+                var responseContent = await resp.Content.ReadAsStringAsync();
 
-            using var resp = await restClient.GetAsync(apiEndpoint);
-            var responseContent = await resp.Content.ReadAsStringAsync();
-            var policies = JsonConvert.DeserializeObject<List<Policy>>(responseContent, settings);
-            Log.LogDebug(traceWriter.ToString());
+                Log.LogTrace("GetPolicyList: HTTP status={StatusCode}, response length={Len}",
+                    resp.StatusCode, responseContent?.Length ?? 0);
 
-            return policies;
+                if (!resp.IsSuccessStatusCode)
+                {
+                    Log.LogError("GetPolicyList: request failed with status {StatusCode}: {Response}", resp.StatusCode, responseContent);
+                    throw new HttpRequestException($"GetPolicyList failed with HTTP {resp.StatusCode}: {responseContent}");
+                }
+
+                var policies = JsonConvert.DeserializeObject<List<Policy>>(responseContent, settings);
+
+                if (policies == null)
+                {
+                    Log.LogWarning("GetPolicyList: deserialized policy list is null");
+                    return new List<Policy>();
+                }
+
+                Log.LogTrace("GetPolicyList: returned {Count} policies", policies.Count);
+                return policies;
+            }
+            catch (Exception e)
+            {
+                Log.LogError(e, "GetPolicyList: exception: {Message}", e.Message);
+                throw;
+            }
         }
 
 
@@ -157,22 +241,37 @@ namespace Keyfactor.HydrantId.Client
         public async Task<Certificate> GetSubmitGetCertificateAsync(string certificateId)
         {
             Log.MethodEntry();
+            Log.LogTrace("GetSubmitGetCertificateAsync: certificateId='{CertId}'", certificateId ?? "(null)");
+
+            if (string.IsNullOrEmpty(certificateId))
+                throw new ArgumentNullException(nameof(certificateId), "certificateId cannot be null or empty.");
 
             var apiEndpoint = $"/api/v2/certificates/{certificateId}";
-            Log.LogTrace($"API Url: {BaseUrl + apiEndpoint}");
+            var fullUrl = BaseUrl + apiEndpoint;
+            Log.LogTrace("GetSubmitGetCertificateAsync: API Url={Url}", fullUrl);
 
             try
             {
-                var restClient = ConfigureRestClient("get", BaseUrl + apiEndpoint);
+                var restClient = ConfigureRestClient("get", fullUrl);
                 using var response = await restClient.GetAsync(apiEndpoint);
-                response.EnsureSuccessStatusCode();
 
                 var content = await response.Content.ReadAsStringAsync();
-                return JsonConvert.DeserializeObject<Certificate>(content);
+                Log.LogTrace("GetSubmitGetCertificateAsync: HTTP status={StatusCode}, response length={Len}",
+                    response.StatusCode, content?.Length ?? 0);
+
+                response.EnsureSuccessStatusCode();
+
+                var cert = JsonConvert.DeserializeObject<Certificate>(content);
+                if (cert == null)
+                {
+                    Log.LogWarning("GetSubmitGetCertificateAsync: deserialized certificate is null for ID='{CertId}'", certificateId);
+                }
+
+                return cert;
             }
             catch (Exception e)
             {
-                Log.LogError($"Error in HydrantIdClient.GetSubmitGetCertificateAsync: {e.Message}");
+                Log.LogError(e, "GetSubmitGetCertificateAsync: exception for certificateId='{CertId}': {Message}", certificateId, e.Message);
                 throw;
             }
         }
@@ -180,24 +279,40 @@ namespace Keyfactor.HydrantId.Client
 
         public async Task<Certificate> GetSubmitGetCertificateByCsrAsync(string requestTrackingId)
         {
+            Log.MethodEntry();
+            Log.LogTrace("GetSubmitGetCertificateByCsrAsync: requestTrackingId='{TrackingId}'", requestTrackingId ?? "(null)");
+
+            if (string.IsNullOrEmpty(requestTrackingId))
+                throw new ArgumentNullException(nameof(requestTrackingId), "requestTrackingId cannot be null or empty.");
+
             try
             {
-                Log.MethodEntry();
                 var apiEndpoint = $"/api/v2/csr/{requestTrackingId}/certificate";
-                Log.LogTrace($"API Url {BaseUrl + apiEndpoint}");
-                var restClient = ConfigureRestClient("get", BaseUrl + apiEndpoint);
+                var fullUrl = BaseUrl + apiEndpoint;
+                Log.LogTrace("GetSubmitGetCertificateByCsrAsync: API Url={Url}", fullUrl);
+
+                var restClient = ConfigureRestClient("get", fullUrl);
 
                 using (var resp = await restClient.GetAsync(apiEndpoint))
                 {
+                    var content = await resp.Content.ReadAsStringAsync();
+                    Log.LogTrace("GetSubmitGetCertificateByCsrAsync: HTTP status={StatusCode}, response length={Len}",
+                        resp.StatusCode, content?.Length ?? 0);
+
                     resp.EnsureSuccessStatusCode();
-                    var getCertificateResponse =
-                        JsonConvert.DeserializeObject<Certificate>(await resp.Content.ReadAsStringAsync());
+
+                    var getCertificateResponse = JsonConvert.DeserializeObject<Certificate>(content);
+                    if (getCertificateResponse == null)
+                    {
+                        Log.LogWarning("GetSubmitGetCertificateByCsrAsync: deserialized response is null for trackingId='{TrackingId}'", requestTrackingId);
+                    }
+
                     return getCertificateResponse;
                 }
             }
             catch (Exception e)
             {
-                Log.LogError($"Error Occured in HydrantIdClient.GetSubmitGetCertificateAsync: {e.Message}");
+                Log.LogError(e, "GetSubmitGetCertificateByCsrAsync: exception for trackingId='{TrackingId}': {Message}", requestTrackingId, e.Message);
                 throw;
             }
         }
@@ -205,15 +320,18 @@ namespace Keyfactor.HydrantId.Client
         public async Task<CertificateStatus> GetSubmitRevokeCertificateAsync(string hydrantId, RevocationReasons revokeReason)
         {
             Log.MethodEntry();
+            Log.LogTrace("GetSubmitRevokeCertificateAsync: hydrantId='{HydrantId}', revokeReason={Reason}", hydrantId ?? "(null)", revokeReason);
+
+            if (string.IsNullOrEmpty(hydrantId))
+                throw new ArgumentNullException(nameof(hydrantId), "hydrantId cannot be null or empty.");
 
             var apiEndpoint = $"/api/v2/certificates/{hydrantId}";
             var fullUrl = BaseUrl + apiEndpoint;
-
-            Log.LogTrace($"API Url: {fullUrl}");
+            Log.LogTrace("GetSubmitRevokeCertificateAsync: API Url={Url}", fullUrl);
 
             var restClient = ConfigureRestClient("patch", fullUrl);
             var revokeRequest = RequestManager.GetRevokeRequest(revokeReason);
-            Log.LogTrace($"Revoke Request JSON: {JsonConvert.SerializeObject(revokeRequest)}");
+            Log.LogTrace("GetSubmitRevokeCertificateAsync: request JSON: {Json}", JsonConvert.SerializeObject(revokeRequest));
 
             try
             {
@@ -221,16 +339,26 @@ namespace Keyfactor.HydrantId.Client
                     JsonConvert.SerializeObject(revokeRequest), Encoding.UTF8, "application/json"));
 
                 var json = await response.Content.ReadAsStringAsync();
+                Log.LogTrace("GetSubmitRevokeCertificateAsync: HTTP status={StatusCode}, response length={Len}",
+                    response.StatusCode, json?.Length ?? 0);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    Log.LogError("GetSubmitRevokeCertificateAsync: revoke failed with status {StatusCode}: {Response}",
+                        response.StatusCode, json);
+                    throw new HttpRequestException($"Revoke API call failed with HTTP {response.StatusCode}: {json}");
+                }
+
                 var revokeResponse = JsonConvert.DeserializeObject<CertificateStatus>(
                     json,
                     new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore });
 
-                Log.LogTrace($"Revoke Response JSON: {JsonConvert.SerializeObject(revokeResponse)}");
+                Log.LogTrace("GetSubmitRevokeCertificateAsync: response JSON: {Json}", JsonConvert.SerializeObject(revokeResponse));
                 return revokeResponse;
             }
             catch (Exception e)
             {
-                Log.LogError($"Error in HydrantIdClient.GetSubmitRevokeCertificateAsync: {e.Message}");
+                Log.LogError(e, "GetSubmitRevokeCertificateAsync: exception for hydrantId='{HydrantId}': {Message}", hydrantId, e.Message);
                 throw;
             }
         }
@@ -240,6 +368,8 @@ namespace Keyfactor.HydrantId.Client
             CancellationToken ct)
         {
             Log.MethodEntry();
+            Log.LogTrace("GetSubmitCertificateListRequestAsync: starting certificate list retrieval, pageSize={PageSize}", PageSize);
+
             try
             {
                 var itemsProcessed = 0;
@@ -248,90 +378,111 @@ namespace Keyfactor.HydrantId.Client
                 var retryCount = 0;
                 do
                 {
-                    Log.LogTrace($"pageCounter: {pageCounter}  pageSize: {PageSize}");
+                    Log.LogTrace("GetSubmitCertificateListRequestAsync: pageCounter={PageCounter}, pageSize={PageSize}", pageCounter, PageSize);
                     var queryOrderRequest = RequestManager.GetCertificatesListRequest(pageCounter, PageSize);
-                    Log.LogTrace($"queryOrderRequest JSON: {JsonConvert.SerializeObject(queryOrderRequest)}");
+                    Log.LogTrace("GetSubmitCertificateListRequestAsync: queryOrderRequest JSON: {Json}", JsonConvert.SerializeObject(queryOrderRequest));
                     var batchItemsProcessed = 0;
 
                     var apiEndpoint = "/api/v2/certificates";
-                    Log.LogTrace($"API Url {BaseUrl + apiEndpoint}");
-                    var restClient = ConfigureRestClient("post", BaseUrl + apiEndpoint);
+                    var fullUrl = BaseUrl + apiEndpoint;
+                    Log.LogTrace("GetSubmitCertificateListRequestAsync: API Url={Url}", fullUrl);
+                    var restClient = ConfigureRestClient("post", fullUrl);
 
                     using (var resp = await restClient.PostAsync(apiEndpoint, new StringContent(
                         JsonConvert.SerializeObject(queryOrderRequest), Encoding.UTF8, "application/json"), ct))
                     {
                         if (!resp.IsSuccessStatusCode)
                         {
-                            var responseMessage = resp.Content.ReadAsStringAsync().Result;
+                            var responseMessage = await resp.Content.ReadAsStringAsync();
                             Log.LogError(
-                                $"Failed Request to Keyfactor. Retrying request. Status Code {resp.StatusCode} | Message: {responseMessage}");
+                                "GetSubmitCertificateListRequestAsync: request failed. StatusCode={StatusCode}, Message={Message}",
+                                resp.StatusCode, responseMessage ?? "(null)");
                             retryCount++;
                             if (retryCount > 5)
                                 throw new RetryCountExceededException(
-                                    $"5 consecutive failures to {resp.RequestMessage.RequestUri}");
+                                    $"5 consecutive failures to {resp.RequestMessage?.RequestUri}");
 
                             continue;
                         }
 
+                        retryCount = 0;
                         var stringResponse = await resp.Content.ReadAsStringAsync();
 
-                        var batchResponse =
-                            JsonConvert.DeserializeObject<CertificatesResponse>(stringResponse);
+                        var batchResponse = JsonConvert.DeserializeObject<CertificatesResponse>(stringResponse);
 
-                        Log.LogTrace($"batchResponse JSON: {JsonConvert.SerializeObject(batchResponse)}");
+                        Log.LogTrace("GetSubmitCertificateListRequestAsync: batchResponse is {Null}",
+                            batchResponse == null ? "NULL" : "present");
 
-                        if (batchResponse != null)
+                        if (batchResponse?.Items != null)
                         {
                             var batchCount = batchResponse.Items.Count;
+                            Log.LogTrace("GetSubmitCertificateListRequestAsync: processing {Count} items in batch", batchCount);
 
-                            Log.LogTrace($"Processing {batchCount} items in batch");
                             do
                             {
                                 var r = batchResponse.Items[batchItemsProcessed];
+                                if (r == null)
+                                {
+                                    Log.LogTrace("GetSubmitCertificateListRequestAsync: skipping null item at index {Index}", batchItemsProcessed);
+                                    batchItemsProcessed++;
+                                    continue;
+                                }
+
                                 if (bc.TryAdd(r, 10, ct))
                                 {
-                                    Log.LogTrace($"Added Template ID {r.Id} to Queue for processing");
+                                    Log.LogTrace("GetSubmitCertificateListRequestAsync: added ID={Id} to queue (batch {BatchIdx}/{BatchCount}, total={Total})",
+                                        r.Id ?? "(null)", batchItemsProcessed + 1, batchCount, itemsProcessed + 1);
                                     batchItemsProcessed++;
                                     itemsProcessed++;
-                                    Log.LogTrace($"Processed {batchItemsProcessed} of {batchCount}");
-                                    Log.LogTrace($"Total Items Processed: {itemsProcessed}");
                                 }
                                 else
                                 {
-                                    Log.LogTrace($"Adding {r} blocked. Retry");
+                                    Log.LogTrace("GetSubmitCertificateListRequestAsync: adding ID={Id} blocked, retrying", r.Id ?? "(null)");
                                 }
-                            } while (batchItemsProcessed < batchCount); //batch loop
+                            } while (batchItemsProcessed < batchCount);
+                        }
+                        else
+                        {
+                            Log.LogWarning("GetSubmitCertificateListRequestAsync: batchResponse or Items is null at pageCounter={PageCounter}", pageCounter);
                         }
                     }
 
-                    //assume that if we process less records than requested that we have reached the end of the certificate list
                     if (batchItemsProcessed < PageSize)
                         isComplete = true;
                     pageCounter = pageCounter + PageSize;
-                } while (!isComplete); //page loop
+                } while (!isComplete);
 
-                bc.CompleteAdding();
+                Log.LogTrace("GetSubmitCertificateListRequestAsync: completed. Total items processed={Total}", itemsProcessed);
+
+                if (!bc.IsAddingCompleted)
+                    bc.CompleteAdding();
             }
             catch (OperationCanceledException cancelEx)
             {
-                Log.LogWarning($"Synchronize method was cancelled. Message: {cancelEx.Message}");
-                bc.CompleteAdding();
-                Log.MethodExit();
-                // ReSharper disable once PossibleIntendedRethrow
+                Log.LogWarning("GetSubmitCertificateListRequestAsync: cancelled. Message={Message}", cancelEx.Message);
+                if (!bc.IsAddingCompleted)
+                    bc.CompleteAdding();
                 throw;
             }
             catch (RetryCountExceededException retryEx)
             {
-                Log.LogError($"Retries Failed: {retryEx.Message}");
-                Log.MethodExit();
-                bc.CompleteAdding();
+                Log.LogError(retryEx, "GetSubmitCertificateListRequestAsync: retries exceeded: {Message}", retryEx.Message);
+                if (!bc.IsAddingCompleted)
+                    bc.CompleteAdding();
                 throw;
             }
             catch (HttpRequestException ex)
             {
-                Log.LogError($"HttpRequest Failed: {ex.Message}");
-                Log.MethodExit();
-                bc.CompleteAdding();
+                Log.LogError(ex, "GetSubmitCertificateListRequestAsync: HTTP request failed: {Message}", ex.Message);
+                if (!bc.IsAddingCompleted)
+                    bc.CompleteAdding();
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Log.LogError(ex, "GetSubmitCertificateListRequestAsync: unhandled exception: {Message}", ex.Message);
+                if (!bc.IsAddingCompleted)
+                    bc.CompleteAdding();
                 throw;
             }
 
@@ -342,9 +493,9 @@ namespace Keyfactor.HydrantId.Client
         {
             Log.MethodEntry();
 
-            var apiEndpoint = "/api/v2/policies"; // Lightweight, safe endpoint
+            var apiEndpoint = "/api/v2/policies";
             var fullUrl = BaseUrl + apiEndpoint;
-            Log.LogTrace($"Ping API Url: {fullUrl}");
+            Log.LogTrace("Ping: API Url={Url}", fullUrl);
 
             try
             {
@@ -352,41 +503,61 @@ namespace Keyfactor.HydrantId.Client
                 using var response = await restClient.GetAsync(apiEndpoint);
                 var content = await response.Content.ReadAsStringAsync();
 
+                Log.LogTrace("Ping: HTTP status={StatusCode}, response length={Len}", response.StatusCode, content?.Length ?? 0);
+
                 if (!response.IsSuccessStatusCode)
                 {
-                    Log.LogError($"Ping failed. Status: {response.StatusCode}, Response: {content}");
+                    Log.LogError("Ping: failed. Status={StatusCode}, Response={Response}", response.StatusCode, content);
                     return false;
                 }
 
-                Log.LogTrace("Ping successful.");
+                Log.LogTrace("Ping: successful.");
                 return true;
             }
             catch (Exception e)
             {
-                Log.LogError($"Error in HydrantIdClient.Ping: {e.Message}");
+                Log.LogError(e, "Ping: exception: {Message}", e.Message);
                 return false;
             }
         }
 
 
-        // ReSharper disable once InconsistentNaming
         private HttpClient ConfigureRestClient(string method, string url)
         {
             try
             {
                 Log.MethodEntry();
+                Log.LogTrace("ConfigureRestClient: method='{Method}', url='{Url}'", method ?? "(null)", url ?? "(null)");
+
+                if (string.IsNullOrEmpty(method))
+                    throw new ArgumentNullException(nameof(method), "HTTP method cannot be null or empty.");
+                if (string.IsNullOrEmpty(url))
+                    throw new ArgumentNullException(nameof(url), "URL cannot be null or empty.");
+
                 var bUrl = new Uri(BaseUrl);
-                ApiId = ConfigProvider.CAConnectionData[HydrantIdCAPluginConfig.ConfigConstants.HydrantIdAuthId].ToString();
+                ApiId = ConfigProvider.CAConnectionData[HydrantIdCAPluginConfig.ConfigConstants.HydrantIdAuthId]?.ToString();
+
+                if (string.IsNullOrEmpty(ApiId))
+                {
+                    Log.LogError("ConfigureRestClient: ApiId is null or empty after reading from config.");
+                    throw new InvalidOperationException("HydrantIdAuthId is null or empty in CAConnectionData.");
+                }
+
+                var authKey = ConfigProvider.CAConnectionData[HydrantIdCAPluginConfig.ConfigConstants.HydrantIdAuthKey]?.ToString();
+                if (string.IsNullOrEmpty(authKey))
+                {
+                    Log.LogError("ConfigureRestClient: AuthKey is null or empty after reading from config.");
+                    throw new InvalidOperationException("HydrantIdAuthKey is null or empty in CAConnectionData.");
+                }
 
                 var credentials = new HawkCredential
                 {
-                    Id = ConfigProvider.CAConnectionData[HydrantIdCAPluginConfig.ConfigConstants.HydrantIdAuthId].ToString(),
-                    Key = ConfigProvider.CAConnectionData[HydrantIdCAPluginConfig.ConfigConstants.HydrantIdAuthKey].ToString(),
+                    Id = ApiId,
+                    Key = authKey,
                     Algorithm = "sha256"
                 };
 
                 var byteArray = new byte[20];
-                //Generate a cryptographically random set of bytes
                 using (var rnd = RandomNumberGenerator.Create())
                 {
                     rnd.GetBytes(byteArray);
@@ -400,8 +571,7 @@ namespace Keyfactor.HydrantId.Client
                 var authorization =
                     $"id=\"{ApiId}\", ts=\"{ts}\", nonce=\"{nOnce}\", mac=\"{mac}\"";
 
-
-                var clientHandler = new HttpClientHandler(); // Replaces WebRequestHandler in .NET 6
+                var clientHandler = new HttpClientHandler();
 
                 var returnClient = new HttpClient(clientHandler, disposeHandler: true)
                 {
@@ -411,11 +581,12 @@ namespace Keyfactor.HydrantId.Client
                 returnClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
                 returnClient.DefaultRequestHeaders.Add("Authorization", "Hawk " + authorization);
 
+                Log.LogTrace("ConfigureRestClient: configured client for {Method} {Url}", method, url);
                 return returnClient;
             }
             catch (Exception e)
             {
-                Log.LogError($"Error Occured in HydrantIdClient.ConfigureRestClient: {e.Message}");
+                Log.LogError(e, "ConfigureRestClient: exception: {Message}", e.Message);
                 throw;
             }
         }
