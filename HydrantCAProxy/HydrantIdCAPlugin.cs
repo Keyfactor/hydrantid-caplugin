@@ -52,7 +52,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                     certDataReader = certificateDataReader;
                     Config = configProvider;
                     var rawData = JsonConvert.SerializeObject(configProvider.CAConnectionData);
-                    _logger.LogTrace("Initialize: raw config JSON: {Json}", rawData);
+                    _logger.LogTrace("Initialize: config JSON (sensitive keys masked): {Json}", MaskConfigForLog(rawData));
                     _config = JsonConvert.DeserializeObject<HydrantIdCAPluginConfig.Config>(rawData);
                 });
 
@@ -75,6 +75,38 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             finally
             {
                 _logger.MethodExit();
+            }
+        }
+
+        private static readonly HashSet<string> _sensitiveConfigKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            HydrantIdCAPluginConfig.ConfigConstants.HydrantIdAuthId,
+            HydrantIdCAPluginConfig.ConfigConstants.HydrantIdAuthKey
+        };
+
+        private static string MaskConfigForLog(string rawJson)
+        {
+            if (string.IsNullOrEmpty(rawJson)) return rawJson;
+            try
+            {
+                var token = Newtonsoft.Json.Linq.JToken.Parse(rawJson);
+                if (token is Newtonsoft.Json.Linq.JObject obj)
+                {
+                    foreach (var prop in obj.Properties())
+                    {
+                        if (_sensitiveConfigKeys.Contains(prop.Name) &&
+                            prop.Value.Type != Newtonsoft.Json.Linq.JTokenType.Null)
+                        {
+                            prop.Value = "***REDACTED***";
+                        }
+                    }
+                    return obj.ToString(Newtonsoft.Json.Formatting.None);
+                }
+                return token.ToString(Newtonsoft.Json.Formatting.None);
+            }
+            catch
+            {
+                return "***REDACTED***";
             }
         }
 
@@ -135,7 +167,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
 
             _logger.LogDebug("Validating HydrantId CA Connection properties");
             var rawData = JsonConvert.SerializeObject(connectionInfo);
-            _logger.LogTrace("ValidateCAConnectionInfo: raw connectionInfo JSON: {Json}", rawData);
+            _logger.LogTrace("ValidateCAConnectionInfo: connectionInfo JSON (sensitive keys masked): {Json}", MaskConfigForLog(rawData));
 
             _config = JsonConvert.DeserializeObject<HydrantIdCAPluginConfig.Config>(rawData);
 
