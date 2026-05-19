@@ -78,9 +78,6 @@ namespace Keyfactor.HydrantId
                 RevocationReasons returnStatus;
                 switch (keyfactorRevokeReason)
                 {
-                    case 0:
-                        returnStatus = RevocationReasons.Unspecified;
-                        break;
                     case 1:
                         returnStatus = RevocationReasons.KeyCompromise;
                         break;
@@ -95,7 +92,7 @@ namespace Keyfactor.HydrantId
                         break;
                     default:
                         Log.LogError("GetMapRevokeReasons: unsupported revoke reason {Reason}", keyfactorRevokeReason);
-                        throw new RevokeReasonNotSupportedException($"Revoke reason {keyfactorRevokeReason} is not supported. Supported values: 0 (Unspecified), 1 (KeyCompromise), 3 (AffiliationChanged), 4 (Superseded), 5 (CessationOfOperation).");
+                        throw new RevokeReasonNotSupportedException($"Revoke reason {keyfactorRevokeReason} is not supported. Supported values: 1 (KeyCompromise), 3 (AffiliationChanged), 4 (Superseded), 5 (CessationOfOperation).");
                 }
 
                 Log.LogTrace("GetMapRevokeReasons: {Input} -> {Mapped}", keyfactorRevokeReason, returnStatus);
