@@ -1,3 +1,7 @@
+# v1.0.3
+* Added support for revocation reason 0 (Unspecified) now that HydrantId accepts it
+* Fixed sensitive credentials (HydrantIdAuthId, HydrantIdAuthKey) being written to trace logs in plain text; raw config JSON is now masked before logging
+
 # v1.0.2
 * Fixed revocation status handling - failed revocations no longer incorrectly set certificate status to FAILED; certificate retains its current active status
 * Added FlowLogger utility for structured flow diagrams across all public plugin methods
