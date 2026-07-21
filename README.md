@@ -14,7 +14,7 @@
   <!-- TOC -->
   <a href="#support">
     <b>Support</b>
-  </a> 
+  </a>
   ·
   <a href="#requirements">
     <b>Requirements</b>
@@ -32,7 +32,6 @@
     <b>Related Integrations</b>
   </a>
 </p>
-
 
 The HID Global HydrantId AnyCA Gateway REST plugin extends the capabilities of HydrantId Certificate Authority Service to Keyfactor Command via the Keyfactor AnyCA Gateway. This plugin leverages the HydrantId REST API with Hawk authentication to provide comprehensive certificate lifecycle management. The plugin represents a fully featured AnyCA Plugin with the following capabilities:
 
@@ -55,7 +54,7 @@ The HID Global HydrantId AnyCA Gateway REST plugin extends the capabilities of H
 The HID Global AnyCA Gateway REST plugin is compatible with the Keyfactor AnyCA Gateway REST 26.2 and later.
 
 ## Support
-The HID Global AnyCA Gateway REST plugin is supported by Keyfactor for Keyfactor customers. If you have a support issue, please open a support ticket with your Keyfactor representative. If you have a support issue, please open a support ticket via the Keyfactor Support Portal at https://support.keyfactor.com. 
+The HID Global AnyCA Gateway REST plugin is supported by Keyfactor for Keyfactor customers. If you have a support issue, please open a support ticket via the Keyfactor Support Portal at https://support.keyfactor.com.
 
 > To report a problem or suggest a new feature, use the **[Issues](../../issues)** tab. If you want to contribute actual bug fixes or proposed enhancements, use the **[Pull requests](../../pulls)** tab.
 
@@ -175,16 +174,17 @@ The plugin supports the following standard CRL revocation reasons:
 
 2. On the server hosting the AnyCA Gateway REST, download and unzip the latest [HID Global AnyCA Gateway REST plugin](https://github.com/Keyfactor/hydrantid-caplugin/releases/latest) from GitHub.
 
-3. Copy the unzipped directory (usually called `net6.0` or `net8.0`) to the Extensions directory:
+3. Copy the unzipped directory (usually called `net6.0` or `net8.0` or `net10.0`) to the Extensions directory:
 
 
     ```shell
     Depending on your AnyCA Gateway REST version, copy the unzipped directory to one of the following locations:
     Program Files\Keyfactor\AnyCA Gateway\AnyGatewayREST\net6.0\Extensions
     Program Files\Keyfactor\AnyCA Gateway\AnyGatewayREST\net8.0\Extensions
+    Program Files\Keyfactor\AnyCA Gateway\AnyGatewayREST\net10.0\Extensions
     ```
 
-    > The directory containing the HID Global AnyCA Gateway REST plugin DLLs (`net6.0` or `net8.0`) can be named anything, as long as it is unique within the `Extensions` directory.
+    > The directory containing the HID Global AnyCA Gateway REST plugin DLLs (`net6.0` or `net8.0` or `net10.0`) can be named anything, as long as it is unique within the `Extensions` directory.
 
 4. Restart the AnyCA Gateway REST service.
 
@@ -197,17 +197,17 @@ The plugin supports the following standard CRL revocation reasons:
     * **Gateway Registration**
 
         ### CA Connection Configuration
-
+        
         When registering the HydrantId CA in the AnyCA Gateway, you'll need to provide the following configuration parameters:
-
+        
         | Parameter | Description | Required | Example |
         |-----------|-------------|----------|---------|
         | **HydrantIdBaseUrl** | Full URL to the HydrantId API endpoint | Yes | `https://acm.hydrantid.com` or `https://acm-stage.hydrantid.com` |
         | **HydrantIdAuthId** | API Authentication ID provided by HydrantId | Yes | `your-auth-id` |
         | **HydrantIdAuthKey** | API Authentication Key provided by HydrantId | Yes | `your-secret-auth-key` |
-
+        
         ### Gateway Registration Notes
-
+        
         - Each defined Certificate Authority in the AnyCA Gateway REST can support one HydrantId API endpoint
         - If you have multiple HydrantId environments or accounts, you must define multiple Certificate Authorities in the AnyCA Gateway
         - Each CA configuration will manifest in Command as a separate CA entry
@@ -218,75 +218,74 @@ The plugin supports the following standard CRL revocation reasons:
         - Certificate status mapping
         - End-entity certificate extraction from PEM chains
         - Enrollment completion polling (30-second timeout)
-
+        
         ### Security Considerations
-
+        
         1. **Credential Storage**: Store API credentials securely and restrict access to the Gateway configuration
         2. **Secret Management**: Consider using a secrets management system for AuthKey storage
         3. **Network Security**: Ensure TLS/SSL is properly configured for all API communications
         4. **Least Privilege**: Request API credentials with minimal required permissions
         5. **Audit Logging**: Enable comprehensive logging in both the Gateway and HydrantId for security monitoring
         6. **Credential Rotation**: Regularly rotate API credentials according to your security policy
-
+        
         **CA Connection**
-
+        
         Populate using the configuration fields collected in the [requirements](#requirements) section.
-
+        
         * **HydrantIdBaseUrl** - The base URL for the HydrantId API endpoint. For example, `https://acm.hydrantid.com` or `https://acm-stage.hydrantid.com`.
         * **HydrantIdAuthId** - The API Authentication ID provided by HydrantId for API access.
         * **HydrantIdAuthKey** - The API Authentication Key (secret) provided by HydrantId for API access.
-
+        
         2. **Certificate Template Configuration**
-
+        
          After adding the CA to the Gateway, configure each certificate template:
-
+        
          1. Navigate to the Templates/Products section for the newly added CA
          2. For each template (policy) discovered from HydrantId, configure:
             - **ValidityPeriod**: Select `Days`, `Months`, or `Years`
             - **ValidityUnits**: Enter the numeric value (e.g., `365` for one year in days)
             - **RenewalDays**: Enter the renewal window in days (e.g., `30`)
-
+        
          Example configurations:
          - **1-Year Certificate (Days)**: ValidityPeriod=`Days`, ValidityUnits=`365`, RenewalDays=`30`
          - **2-Year Certificate (Years)**: ValidityPeriod=`Years`, ValidityUnits=`2`, RenewalDays=`60`
          - **6-Month Certificate (Months)**: ValidityPeriod=`Months`, ValidityUnits=`6`, RenewalDays=`30`
-
+        
         3. Follow the [official Keyfactor documentation](https://software.keyfactor.com/Guides/AnyCAGatewayREST/Content/AnyCAGatewayREST/AddCA-Keyfactor.htm) to add each defined Certificate Authority to Keyfactor Command and import the newly defined Certificate Templates.
 
     * **CA Connection**
 
         Populate using the configuration fields collected in the [requirements](#requirements) section.
 
-        * **HydrantIdBaseUrl** - The Base URL For the HydrantId Endpoint similar to https://acm-stage.hydrantid.com.  Get this from HydrantId. 
-        * **HydrantIdAuthId** - The AuthId Obtained from HydrantId. 
-        * **HydrantIdAuthKey** - The AuthKey Obtained from HydrantId. 
-        * **Enabled** - Flag to Enable or Disable the CA connector. 
+        * **HydrantIdBaseUrl** - The Base URL For the HydrantId Endpoint similar to https://acm-stage.hydrantid.com.  Get this from HydrantId.
+        * **HydrantIdAuthId** - The AuthId Obtained from HydrantId.
+        * **HydrantIdAuthKey** - The AuthKey Obtained from HydrantId.
+        * **Enabled** - Flag to Enable or Disable the CA connector.
 
 2. ### Template (Product) Configuration
 
-      Each certificate template (policy) discovered from HydrantId requires configuration for enrollment:
+  Each certificate template (policy) discovered from HydrantId requires configuration for enrollment:
 
-      | Parameter | Description | Required | Example |
-      |-----------|-------------|----------|---------|
-      | **ValidityPeriod** | Time unit for certificate lifetime | Yes | `Days`, `Months`, or `Years` |
-      | **ValidityUnits** | Numeric value for the validity period | Yes | `365` (for 1 year in days), `12` (for 1 year in months), `2` (for 2 years) |
-      | **RenewalDays** | Days before expiration to trigger renewal | Yes | `30` (renew within 30 days of expiration) |
+  | Parameter | Description | Required | Example |
+  |-----------|-------------|----------|---------|
+  | **ValidityPeriod** | Time unit for certificate lifetime | Yes | `Days`, `Months`, or `Years` |
+  | **ValidityUnits** | Numeric value for the validity period | Yes | `365` (for 1 year in days), `12` (for 1 year in months), `2` (for 2 years) |
+  | **RenewalDays** | Days before expiration to trigger renewal | Yes | `30` (renew within 30 days of expiration) |
 
-      **Important Notes:**
-      - Template names (Product IDs) are automatically discovered from HydrantId using the GET /api/v2/policies endpoint
-      - The ValidityPeriod and ValidityUnits combine to determine the certificate lifetime
-      - RenewalDays determines the behavior for certificate renewal:
-        - Within window: Performs a renewal operation (maintains certificate lineage)
-        - Outside window: Performs a re-issue operation (new certificate enrollment)
+  **Important Notes:**
+  - Template names (Product IDs) are automatically discovered from HydrantId using the GET /api/v2/policies endpoint
+  - The ValidityPeriod and ValidityUnits combine to determine the certificate lifetime
+  - RenewalDays determines the behavior for certificate renewal:
+    - Within window: Performs a renewal operation (maintains certificate lineage)
+    - Outside window: Performs a re-issue operation (new certificate enrollment)
 
 3. Follow the [official Keyfactor documentation](https://software.keyfactor.com/Guides/AnyCAGatewayREST/Content/AnyCAGatewayREST/AddCA-Keyfactor.htm) to add each defined Certificate Authority to Keyfactor Command and import the newly defined Certificate Templates.
 
 4. In Keyfactor Command (v12.3+), for each imported Certificate Template, follow the [official documentation](https://software.keyfactor.com/Core-OnPrem/Current/Content/ReferenceGuide/Configuring%20Template%20Options.htm) to define enrollment fields for each of the following parameters:
 
-    * **ValidityPeriod** - The desired lifetime time period could be Days, Months or Years. 
-    * **ValidityUnits** - The desired lifetime time value some number indicating days, months or years. 
-    * **RenewalDays** - The window that determines whether it is a renewal vs a re-issue. 
-
+    * **ValidityPeriod** - The desired lifetime time period could be Days, Months or Years.
+    * **ValidityUnits** - The desired lifetime time value some number indicating days, months or years.
+    * **RenewalDays** - The window that determines whether it is a renewal vs a re-issue.
 
 ## Installation
 
@@ -307,7 +306,6 @@ The plugin supports the following standard CRL revocation reasons:
 4. Restart the AnyCA Gateway REST service.
 
 5. Navigate to the AnyCA Gateway REST portal and verify that the Gateway recognizes the HID Global HydrantId plugin by hovering over the ⓘ symbol to the right of the Gateway on the top left of the portal.
-
 
 ## License
 
