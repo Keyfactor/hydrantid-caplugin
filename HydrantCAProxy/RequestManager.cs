@@ -21,6 +21,7 @@ using Keyfactor.Logging;
 using LogHandler = Keyfactor.Logging.LogHandler;
 using Keyfactor.AnyGateway.Extensions;
 using Keyfactor.PKI.Enums.EJBCA;
+using Keyfactor.Extensions.CAPlugin.HydrantId;
 using System.Linq;
 
 namespace Keyfactor.HydrantId
@@ -28,6 +29,41 @@ namespace Keyfactor.HydrantId
     public class RequestManager
     {
         private static readonly ILogger Log = LogHandler.GetClassLogger<RequestManager>();
+
+        // Default values for the template parameters declared in
+        // GetTemplateParameterAnnotations(). Keyfactor Command does not populate a
+        // template's parameter collection with these annotation defaults until the
+        // template has been saved, so an enrollment against a template that was added
+        // but never saved arrives with the keys absent. Falling back to these defaults
+        // keeps enrollment working in that state instead of throwing
+        // ("The given key ... was not present in the dictionary"). See ADO 81803 / 84076.
+        private static readonly Dictionary<string, object> TemplateParameterDefaults =
+            HydrantIdCAPluginConfig.GetTemplateParameterAnnotations()
+                .ToDictionary(kvp => kvp.Key, kvp => kvp.Value.DefaultValue);
+
+        /// <summary>
+        /// Returns the enrollment parameter value supplied by Command, falling back to the
+        /// default declared in <see cref="HydrantIdCAPluginConfig.GetTemplateParameterAnnotations"/>
+        /// when the key is absent or blank. Returns null only when neither a supplied value
+        /// nor an annotation default exists.
+        /// </summary>
+        public static string ResolveTemplateParameter(EnrollmentProductInfo productInfo, string key)
+        {
+            if (productInfo?.ProductParameters != null &&
+                productInfo.ProductParameters.TryGetValue(key, out var supplied) &&
+                !string.IsNullOrWhiteSpace(supplied))
+            {
+                return supplied;
+            }
+
+            if (TemplateParameterDefaults.TryGetValue(key, out var def) && def != null)
+            {
+                Log.LogTrace("ResolveTemplateParameter: '{Key}' not supplied by Command; using annotation default '{Default}'", key, def);
+                return Convert.ToString(def);
+            }
+
+            return null;
+        }
 
         public int GetMapReturnStatus(RevocationStatusEnum hydrantIdStatus)
         {
@@ -160,22 +196,25 @@ namespace Keyfactor.HydrantId
 
             if (productInfo == null)
                 throw new ArgumentNullException(nameof(productInfo), "productInfo cannot be null.");
-            if (productInfo.ProductParameters == null)
-                throw new ArgumentNullException(nameof(productInfo), "productInfo.ProductParameters cannot be null.");
             if (string.IsNullOrEmpty(csr))
                 throw new ArgumentNullException(nameof(csr), "CSR cannot be null or empty.");
 
-            if (!productInfo.ProductParameters.ContainsKey("ValidityPeriod"))
-                throw new ArgumentException("ValidityPeriod is required in ProductParameters.", nameof(productInfo));
-            if (!productInfo.ProductParameters.ContainsKey("ValidityUnits"))
-                throw new ArgumentException("ValidityUnits is required in ProductParameters.", nameof(productInfo));
+            // Resolve validity from the supplied parameters, falling back to annotation
+            // defaults when Command has not yet populated them (unsaved template — ADO 81803).
+            var validityPeriod = ResolveTemplateParameter(productInfo, HydrantIdCAPluginConfig.EnrollmentParametersConstants.ValidityPeriod);
+            var validityUnits = ResolveTemplateParameter(productInfo, HydrantIdCAPluginConfig.EnrollmentParametersConstants.ValidityUnits);
+
+            if (string.IsNullOrWhiteSpace(validityPeriod))
+                throw new ArgumentException("ValidityPeriod was not supplied and no annotation default is defined.", nameof(productInfo));
+            if (string.IsNullOrWhiteSpace(validityUnits))
+                throw new ArgumentException("ValidityUnits was not supplied and no annotation default is defined.", nameof(productInfo));
 
             var request = new CertRequestBody
             {
                 Policy = policyId,
                 Csr = csr,
                 DnComponents = GetDnComponentsRequest(csr),
-                Validity = GetValidity(productInfo.ProductParameters["ValidityPeriod"], Convert.ToInt16(productInfo.ProductParameters["ValidityUnits"]))
+                Validity = GetValidity(validityPeriod, Convert.ToInt16(validityUnits))
             };
 
             if (san != null && san.Count > 0)
