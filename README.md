@@ -52,7 +52,7 @@ The HID Global HydrantId AnyCA Gateway REST plugin extends the capabilities of H
 
 ## Compatibility
 
-The HID Global AnyCA Gateway REST plugin is compatible with the Keyfactor AnyCA Gateway REST 24.2 and later.
+The HID Global AnyCA Gateway REST plugin is compatible with the Keyfactor AnyCA Gateway REST 26.2 and later.
 
 ## Support
 The HID Global AnyCA Gateway REST plugin is supported by Keyfactor for Keyfactor customers. If you have a support issue, please open a support ticket with your Keyfactor representative. If you have a support issue, please open a support ticket via the Keyfactor Support Portal at https://support.keyfactor.com. 
