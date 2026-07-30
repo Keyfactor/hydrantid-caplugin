@@ -590,17 +590,21 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                     var expiration = previousX509.NotAfter;
                     var now = DateTime.UtcNow;
 
-                    if (!productInfo.ProductParameters.ContainsKey("RenewalDays"))
+                    // Resolve RenewalDays from the supplied parameters, falling back to the
+                    // annotation default when Command has not yet populated it (unsaved
+                    // template — ADO 81803). Only fail if there is no default either.
+                    var renewalDays = RequestManager.ResolveTemplateParameter(productInfo, HydrantIdCAPluginConfig.EnrollmentParametersConstants.RenewalDays);
+                    if (string.IsNullOrWhiteSpace(renewalDays))
                     {
-                        flow.Fail("ValidateRenewalDays", "RenewalDays not found in ProductParameters");
+                        flow.Fail("ValidateRenewalDays", "RenewalDays not supplied and no annotation default is defined");
                         return new EnrollmentResult
                         {
                             Status = (int)EndEntityStatus.FAILED,
-                            StatusMessage = "Renewal failed: RenewalDays not found in product parameters."
+                            StatusMessage = "Renewal failed: RenewalDays not found in product parameters and no default is defined."
                         };
                     }
 
-                    var isRenewal = (expiration - now).TotalDays <= Convert.ToInt16(productInfo.ProductParameters["RenewalDays"]);
+                    var isRenewal = (expiration - now).TotalDays <= Convert.ToInt16(renewalDays);
                     _logger.LogTrace("Enroll: expiration={Expiration}, now={Now}, isRenewal={IsRenewal}",
                         expiration, now, isRenewal);
                     flow.Step("DetermineRenewOrReissue", isRenewal ? "Renewal" : "Re-Issue");
