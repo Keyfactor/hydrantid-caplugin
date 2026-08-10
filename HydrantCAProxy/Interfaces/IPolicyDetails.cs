@@ -20,6 +20,5 @@ namespace Keyfactor.HydrantId.Interfaces
         PolicyDetailsExpiryEmails ExpiryEmails { get;set; }
         List<PolicyDetailsCustomFields> CustomFields { get;set; }
         List<PolicyDetailsCustomExtensions> CustomExtensions { get;set; }
-        string Validator { get;set; }
     }
 }
