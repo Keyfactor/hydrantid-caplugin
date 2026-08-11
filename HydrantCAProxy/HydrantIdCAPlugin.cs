@@ -757,9 +757,11 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
         /// <summary>
         /// Resolves the validator for the matched policy, computes the domains (CN + DNS SANs) that
         /// need DNS-based domain control validation, and ensures each is VALIDATED before a CSR is
-        /// submitted. Returns null when enrollment may proceed. Returns a non-null EnrollmentResult
-        /// (FAILED if the policy has no validator configured, EXTERNALVALIDATION if one or more
-        /// domains are still pending) when the caller should return immediately instead of proceeding.
+        /// submitted. Returns null when enrollment may proceed -- either because every domain is
+        /// validated, or because the matched policy has no validator configured, in which case DCV
+        /// is not required and is skipped entirely (not every policy uses domain validation).
+        /// Returns a non-null EXTERNALVALIDATION EnrollmentResult when one or more domains are still
+        /// pending and the caller should return immediately instead of proceeding.
         /// </summary>
         private async Task<EnrollmentResult> EnsureDomainsValidatedForPolicyAsync(
             HydrantIdClient client, FlowLogger flow, Policy policyId, string csr, Dictionary<string, string[]> san)
@@ -767,12 +769,8 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             var validatorId = policyId.Details?.Validator;
             if (string.IsNullOrWhiteSpace(validatorId))
             {
-                flow.Fail("ValidateValidator", "Matched policy has no Validator configured");
-                return new EnrollmentResult
-                {
-                    Status = (int)EndEntityStatus.FAILED,
-                    StatusMessage = $"Enrollment failed: policy '{policyId.Name}' has no validator configured for domain validation."
-                };
+                flow.Skip("DomainValidation", $"policy '{policyId.Name}' has no validator configured; skipping DCV");
+                return null;
             }
 
             var domainsToValidate = _requestManager.GetDomainsToValidate(csr, san);
