@@ -524,6 +524,10 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                     _logger.LogTrace("Enroll: matched policy: {Json}", JsonConvert.SerializeObject(policyId));
                     flow.Step("MatchPolicy", $"policyId={policyId.Id}");
 
+                    var domainValidationResult = await EnsureDomainsValidatedForPolicyAsync(client, flow, policyId, csr, san);
+                    if (domainValidationResult != null)
+                        return domainValidationResult;
+
                     var enrollmentRequest = _requestManager.GetEnrollmentRequest(policyId.Id, productInfo, csr, san);
                     _logger.LogTrace("Enroll: enrollment request JSON: {Json}", JsonConvert.SerializeObject(enrollmentRequest));
 
@@ -662,6 +666,10 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                             };
                         }
 
+                        var reissueDomainValidationResult = await EnsureDomainsValidatedForPolicyAsync(client, flow, policyId, csr, san);
+                        if (reissueDomainValidationResult != null)
+                            return reissueDomainValidationResult;
+
                         var reissueRequest = _requestManager.GetEnrollmentRequest(policyId.Id, productInfo, csr, san);
                         _logger.LogTrace("Enroll: re-issue request JSON: {Json}", JsonConvert.SerializeObject(reissueRequest));
 
@@ -744,6 +752,96 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             {
                 _logger.MethodExit();
             }
+        }
+
+        /// <summary>
+        /// Resolves the validator for the matched policy, computes the domains (CN + DNS SANs) that
+        /// need DNS-based domain control validation, and ensures each is VALIDATED before a CSR is
+        /// submitted. Returns null when enrollment may proceed -- either because every domain is
+        /// validated, or because the matched policy has no validator configured, in which case DCV
+        /// is not required and is skipped entirely (not every policy uses domain validation).
+        /// Returns a non-null EXTERNALVALIDATION EnrollmentResult when one or more domains are still
+        /// pending and the caller should return immediately instead of proceeding.
+        /// </summary>
+        private async Task<EnrollmentResult> EnsureDomainsValidatedForPolicyAsync(
+            HydrantIdClient client, FlowLogger flow, Policy policyId, string csr, Dictionary<string, string[]> san)
+        {
+            var validatorId = policyId.Details?.Validator;
+            if (string.IsNullOrWhiteSpace(validatorId))
+            {
+                flow.Skip("DomainValidation", $"policy '{policyId.Name}' has no validator configured; skipping DCV");
+                return null;
+            }
+
+            var domainsToValidate = _requestManager.GetDomainsToValidate(csr, san);
+            flow.Step("ComputeDomainsToValidate", string.Join(", ", domainsToValidate));
+
+            bool allValidated = true;
+            string pendingMessage = null;
+            await flow.StepAsync("EnsureDomainsValidated", async () =>
+            {
+                (allValidated, pendingMessage) = await EnsureDomainsValidatedAsync(client, flow, domainsToValidate, validatorId);
+            });
+
+            if (allValidated)
+                return null;
+
+            flow.Fail("DomainValidation", "one or more domains pending DCV");
+            return new EnrollmentResult
+            {
+                Status = (int)EndEntityStatus.EXTERNALVALIDATION,
+                StatusMessage = pendingMessage
+            };
+        }
+
+        /// <summary>
+        /// Checks each domain against HydrantID's Domains resource, starting DNS validation for any
+        /// domain that has not been requested yet and re-checking any domain that is still pending.
+        /// Command re-invokes Enroll() from scratch on resubmit, and this plugin has no local state
+        /// store, so listing existing domains and filtering by name is the only way to recover a
+        /// previously-started validation's id across Enroll() calls.
+        /// </summary>
+        private async Task<(bool AllValidated, string PendingMessage)> EnsureDomainsValidatedAsync(
+            HydrantIdClient client, FlowLogger flow, List<string> domainsToValidate, string validatorId)
+        {
+            var existingDomains = await client.GetDomainListAsync();
+
+            var pending = new List<(string Domain, string Instructions)>();
+
+            foreach (var domainName in domainsToValidate)
+            {
+                var match = existingDomains.FirstOrDefault(d =>
+                    string.Equals(d.DomainName, domainName, StringComparison.OrdinalIgnoreCase));
+
+                Domain domain;
+                if (match == null)
+                {
+                    var payload = _requestManager.GetCreateDomainValidationRequest(domainName, validatorId);
+                    domain = await client.GetSubmitCreateDomainValidationAsync(payload);
+                }
+                else if (match.Status != DomainStatusEnum.Validated)
+                {
+                    domain = await client.GetSubmitCheckDomainValidationAsync(match.Id);
+                }
+                else
+                {
+                    continue;
+                }
+
+                if (domain?.Status != DomainStatusEnum.Validated)
+                {
+                    pending.Add((domainName, domain?.CodeInstructions ?? "(no instructions returned by HydrantId)"));
+                }
+            }
+
+            if (pending.Count == 0)
+                return (true, null);
+
+            var message = "Domain validation required before this certificate can be issued. " +
+                "Publish the following DNS record(s), then resubmit:\n" +
+                string.Join("\n", pending.Select(p => $"  - {p.Domain}: {p.Instructions}"));
+
+            return (false, message);
         }
 
         public async Task<int> Revoke(string caRequestID, string hexSerialNumber, uint revocationReason)
