@@ -33,5 +33,8 @@ namespace Keyfactor.HydrantId.Client.Models
         [JsonProperty("customExtensions", NullValueHandling = NullValueHandling.Ignore)]
         public List<PolicyDetailsCustomExtensions> CustomExtensions { get;set; }
 
+        [JsonProperty("validator", NullValueHandling = NullValueHandling.Ignore)]
+        public string Validator { get;set; }
+
     }
 }
