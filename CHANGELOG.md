@@ -1,5 +1,5 @@
 # v1.0.3
-* Added support for revocation reason 0 (Unspecified) now that HydrantId accepts it
+* Added support for revocation reason 0 (Unspecified) now that HydrantId accepts it 
 * Fixed sensitive credentials (HydrantIdAuthId, HydrantIdAuthKey) being written to trace logs in plain text; raw config JSON is now masked before logging
 
 # v1.0.2
