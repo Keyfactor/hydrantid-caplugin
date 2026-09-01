@@ -165,6 +165,18 @@ namespace HydrantCAProxy.Tests
         }
 
         [Fact]
+        public void GetEnrollmentRequest_UnrecognizedValidityPeriod_Throws()
+        {
+            var productInfo = ProductInfo(new Dictionary<string, string>
+            {
+                ["ValidityPeriod"] = "Fortnights",
+                ["ValidityUnits"] = "2"
+            });
+
+            Assert.Throws<ArgumentException>(() => _sut.GetEnrollmentRequest(Guid.NewGuid(), productInfo, SampleCsr, null));
+        }
+
+        [Fact]
         public void GetEnrollmentRequest_WithSans_PopulatesSubjectAltNames()
         {
             var productInfo = ProductInfo(new Dictionary<string, string>());
@@ -280,6 +292,88 @@ namespace HydrantCAProxy.Tests
             Assert.Equal(2, result.Ipaddress.Count);
             Assert.Single(result.Rfc822Name);
             Assert.Single(result.Upn);
+        }
+
+        // ---------------------------------------------------------------------
+        // GetDomainsToValidate
+        // ---------------------------------------------------------------------
+
+        [Fact]
+        public void GetDomainsToValidate_CnOnly_ReturnsSingleDomain()
+        {
+            var result = _sut.GetDomainsToValidate(SampleCsr, null);
+
+            Assert.Single(result);
+            Assert.Equal("unit.test.hydrantid.local", result[0]);
+        }
+
+        [Fact]
+        public void GetDomainsToValidate_CnPlusDnsSans_ReturnsDeduped()
+        {
+            var sans = new Dictionary<string, string[]>
+            {
+                ["dnsname"] = new[] { "unit.test.hydrantid.local", "www.example.com" }
+            };
+
+            var result = _sut.GetDomainsToValidate(SampleCsr, sans);
+
+            Assert.Equal(2, result.Count);
+            Assert.Contains("unit.test.hydrantid.local", result);
+            Assert.Contains("www.example.com", result);
+        }
+
+        [Fact]
+        public void GetDomainsToValidate_SansCaseVariant_DedupedAgainstCn()
+        {
+            var sans = new Dictionary<string, string[]>
+            {
+                ["dnsname"] = new[] { "UNIT.TEST.HYDRANTID.LOCAL" }
+            };
+
+            var result = _sut.GetDomainsToValidate(SampleCsr, sans);
+
+            Assert.Single(result);
+        }
+
+        [Fact]
+        public void GetDomainsToValidate_NullCsr_ThrowsArgumentNullException()
+        {
+            Assert.Throws<ArgumentNullException>(() => _sut.GetDomainsToValidate(null, null));
+        }
+
+        // ---------------------------------------------------------------------
+        // GetCreateDomainValidationRequest
+        // ---------------------------------------------------------------------
+
+        [Fact]
+        public void GetCreateDomainValidationRequest_Valid_SetsDnsMethodAndOmitsAccountId()
+        {
+            var result = _sut.GetCreateDomainValidationRequest("example.com", "validator-1");
+
+            Assert.Equal("example.com", result.DomainName);
+            Assert.Equal("validator-1", result.Validator);
+            Assert.Equal(ValidationMethod.Dns, result.Method);
+            Assert.Null(result.AccountId);
+        }
+
+        [Fact]
+        public void GetCreateDomainValidationRequest_AccountIdSupplied_SetsAccountId()
+        {
+            var result = _sut.GetCreateDomainValidationRequest("example.com", "validator-1", "account-123");
+
+            Assert.Equal("account-123", result.AccountId);
+        }
+
+        [Fact]
+        public void GetCreateDomainValidationRequest_NullDomain_ThrowsArgumentNullException()
+        {
+            Assert.Throws<ArgumentNullException>(() => _sut.GetCreateDomainValidationRequest(null, "validator-1"));
+        }
+
+        [Fact]
+        public void GetCreateDomainValidationRequest_NullValidatorId_ThrowsArgumentNullException()
+        {
+            Assert.Throws<ArgumentNullException>(() => _sut.GetCreateDomainValidationRequest("example.com", null));
         }
 
         // ---------------------------------------------------------------------

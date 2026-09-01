@@ -273,8 +273,7 @@ namespace Keyfactor.HydrantId
                         validity.Days = units;
                         break;
                     default:
-                        Log.LogWarning("GetValidity: unrecognized period '{Period}', no validity set", period);
-                        break;
+                        throw new ArgumentException($"Unrecognized validity period '{period}'; expected 'Years', 'Months', or 'Days'.", nameof(period));
                 }
 
                 return validity;
@@ -332,6 +331,76 @@ namespace Keyfactor.HydrantId
             }
         }
 
+
+        public List<string> GetDomainsToValidate(string csr, Dictionary<string, string[]> san)
+        {
+            try
+            {
+                Log.MethodEntry();
+                Log.LogTrace("GetDomainsToValidate: csr length={CsrLen}, san count={Count}", csr?.Length ?? 0, san?.Count ?? 0);
+
+                if (string.IsNullOrEmpty(csr))
+                    throw new ArgumentNullException(nameof(csr), "CSR cannot be null or empty.");
+
+                var domains = new List<string>();
+
+                var cn = GetDnComponentsRequest(csr)?.Cn;
+                if (!string.IsNullOrWhiteSpace(cn))
+                    domains.Add(cn.Trim());
+
+                var sanNames = GetSansRequest(san)?.Dnsname;
+                if (sanNames != null)
+                    domains.AddRange(sanNames.Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => n.Trim()));
+
+                var deduped = domains
+                    .GroupBy(d => d, StringComparer.OrdinalIgnoreCase)
+                    .Select(g => g.First())
+                    .ToList();
+
+                Log.LogTrace("GetDomainsToValidate: {Count} unique domain(s): {Domains}", deduped.Count, string.Join(", ", deduped));
+                Log.MethodExit();
+                return deduped;
+            }
+            catch (Exception e)
+            {
+                Log.LogError(e, "Error occurred in RequestManager.GetDomainsToValidate: {Message}", e.Message);
+                throw;
+            }
+        }
+
+        public CreateDomainValidationPayload GetCreateDomainValidationRequest(string domain, string validatorId, string accountId = null)
+        {
+            try
+            {
+                Log.MethodEntry();
+                Log.LogTrace("GetCreateDomainValidationRequest: domain='{Domain}', validatorId='{ValidatorId}', accountId='{AccountId}'",
+                    domain ?? "(null)", validatorId ?? "(null)", accountId ?? "(null)");
+
+                if (string.IsNullOrEmpty(domain))
+                    throw new ArgumentNullException(nameof(domain), "domain cannot be null or empty.");
+                if (string.IsNullOrEmpty(validatorId))
+                    throw new ArgumentNullException(nameof(validatorId), "validatorId cannot be null or empty.");
+
+                var payload = new CreateDomainValidationPayload
+                {
+                    DomainName = domain,
+                    Validator = validatorId,
+                    Method = ValidationMethod.Dns,
+                    // Some HydrantId tenants require accountId on this call despite Hawk auth
+                    // already scoping the account -- omitted (not just blank) when not configured,
+                    // since CreateDomainValidationPayload.AccountId ignores null on serialization.
+                    AccountId = string.IsNullOrEmpty(accountId) ? null : accountId
+                };
+
+                Log.MethodExit();
+                return payload;
+            }
+            catch (Exception e)
+            {
+                Log.LogError(e, "Error occurred in RequestManager.GetCreateDomainValidationRequest: {Message}", e.Message);
+                throw;
+            }
+        }
 
         public EnrollmentResult GetEnrollmentResult(ICertificate enrollmentResult, AnyCAPluginCertificate cert)
         {
