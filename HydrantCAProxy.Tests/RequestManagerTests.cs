@@ -165,6 +165,18 @@ namespace HydrantCAProxy.Tests
         }
 
         [Fact]
+        public void GetEnrollmentRequest_UnrecognizedValidityPeriod_Throws()
+        {
+            var productInfo = ProductInfo(new Dictionary<string, string>
+            {
+                ["ValidityPeriod"] = "Fortnights",
+                ["ValidityUnits"] = "2"
+            });
+
+            Assert.Throws<ArgumentException>(() => _sut.GetEnrollmentRequest(Guid.NewGuid(), productInfo, SampleCsr, null));
+        }
+
+        [Fact]
         public void GetEnrollmentRequest_WithSans_PopulatesSubjectAltNames()
         {
             var productInfo = ProductInfo(new Dictionary<string, string>());

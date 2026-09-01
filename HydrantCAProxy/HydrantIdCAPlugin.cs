@@ -27,10 +27,13 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
     public class HydrantIdCAPlugin : IAnyCAPlugin
     {
         private static readonly ILogger _logger = LogHandler.GetClassLogger<HydrantIdCAPlugin>();
-        private RequestManager _requestManager;
+        private readonly RequestManager _requestManager = new RequestManager();
         private IAnyCAPluginConfigProvider Config { get; set; }
         private ICertificateDataReader certDataReader;
         private HydrantIdCAPluginConfig.Config _config;
+
+        internal Func<IAnyCAPluginConfigProvider, IHydrantIdClient> ClientFactory { get; set; }
+            = config => new HydrantIdClient(config);
 
         public void Initialize(IAnyCAPluginConfigProvider configProvider, ICertificateDataReader certificateDataReader)
         {
@@ -84,7 +87,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             HydrantIdCAPluginConfig.ConfigConstants.HydrantIdAuthKey
         };
 
-        private static string MaskConfigForLog(string rawJson)
+        internal static string MaskConfigForLog(string rawJson)
         {
             if (string.IsNullOrEmpty(rawJson)) return rawJson;
             try
@@ -111,18 +114,6 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             }
         }
 
-        private static List<string> CheckRequiredValues(Dictionary<string, object> connectionInfo, params string[] args)
-        {
-            List<string> errors = new List<string>();
-            foreach (string s in args)
-                if (string.IsNullOrEmpty(connectionInfo[s] as string))
-                    errors.Add($"{s} is a required value");
-            return errors;
-        }
-
-        private static readonly Func<string, string> pemify = ss =>
-            ss.Length <= 64 ? ss : ss.Substring(0, 64) + "\n" + pemify(ss.Substring(64));
-
         public async Task Ping()
         {
             using var flow = new FlowLogger(_logger, "Ping");
@@ -147,7 +138,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                 }
 
                 _logger.LogDebug("Pinging HydrantId to validate connection");
-                var client = new HydrantIdClient(Config);
+                var client = ClientFactory(Config);
                 var reachable = await client.Ping();
 
                 if (!reachable)
@@ -232,7 +223,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
 
             try
             {
-                var client = new HydrantIdClient(Config);
+                var client = ClientFactory(Config);
                 List<Policy> policies = null;
 
                 flow.Step("FetchPolicies", () =>
@@ -273,10 +264,9 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             using var flow = new FlowLogger(_logger, $"Synchronize(fullSync={fullSync})");
             _logger.MethodEntry();
             _logger.LogTrace("Synchronize: lastSync={LastSync}, fullSync={FullSync}", lastSync?.ToString() ?? "(null)", fullSync);
-            _requestManager = new RequestManager();
 
             var certs = new BlockingCollection<ICertificatesResponseItem>(100);
-            var client = new HydrantIdClient(Config);
+            var client = ClientFactory(Config);
             var processedCount = 0;
             var skippedCount = 0;
 
@@ -393,7 +383,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
         }
 
         // Helper method to extract end entity certificate from PEM chain
-        private string GetEndEntityCertificate(string certData)
+        internal string GetEndEntityCertificate(string certData)
         {
             _logger.LogTrace("GetEndEntityCertificate: input length={Length}", certData?.Length ?? 0);
 
@@ -464,7 +454,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
         }
 
         // Helper method to export X509Certificate2Collection to PEM format
-        private string ExportCollectionToPem(X509Certificate2Collection collection)
+        internal string ExportCollectionToPem(X509Certificate2Collection collection)
         {
             var sb = new StringBuilder();
             foreach (var cert in collection)
@@ -483,9 +473,8 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             _logger.LogTrace("Enroll: csr length={CsrLen}, subject='{Subject}', enrollmentType={Type}, productID='{ProductId}'",
                 csr?.Length ?? 0, subject ?? "(null)", enrollmentType, productInfo?.ProductID ?? "(null)");
 
-            _requestManager = new RequestManager();
             Certificate csrTrackingResponse = null;
-            var client = new HydrantIdClient(Config);
+            var client = ClientFactory(Config);
 
             try
             {
@@ -774,8 +763,8 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
         /// Returns a non-null EXTERNALVALIDATION EnrollmentResult when one or more domains are still
         /// pending and the caller should return immediately instead of proceeding.
         /// </summary>
-        private async Task<EnrollmentResult> EnsureDomainsValidatedForPolicyAsync(
-            HydrantIdClient client, FlowLogger flow, Policy policyId, string csr, Dictionary<string, string[]> san)
+        internal async Task<EnrollmentResult> EnsureDomainsValidatedForPolicyAsync(
+            IHydrantIdClient client, FlowLogger flow, Policy policyId, string csr, Dictionary<string, string[]> san)
         {
             var validatorId = policyId.Details?.Validator;
             if (string.IsNullOrWhiteSpace(validatorId))
@@ -812,8 +801,8 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
         /// store, so listing existing domains and filtering by name is the only way to recover a
         /// previously-started validation's id across Enroll() calls.
         /// </summary>
-        private async Task<(bool AllValidated, string PendingMessage)> EnsureDomainsValidatedAsync(
-            HydrantIdClient client, FlowLogger flow, List<string> domainsToValidate, string validatorId)
+        internal async Task<(bool AllValidated, string PendingMessage)> EnsureDomainsValidatedAsync(
+            IHydrantIdClient client, FlowLogger flow, List<string> domainsToValidate, string validatorId)
         {
             var existingDomains = await client.GetDomainListAsync();
 
@@ -874,8 +863,6 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             _logger.LogTrace("Revoke: caRequestID='{CaRequestId}', hexSerialNumber='{SerialNumber}', revocationReason={Reason}",
                 caRequestID ?? "(null)", hexSerialNumber ?? "(null)", revocationReason);
 
-            _requestManager = new RequestManager();
-
             try
             {
                 flow.Step("ValidateInput", () =>
@@ -886,7 +873,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                         throw new ArgumentException($"caRequestID '{caRequestID}' is too short ({caRequestID.Length} chars) to extract a UUID.", nameof(caRequestID));
                 });
 
-                var client = new HydrantIdClient(Config);
+                var client = ClientFactory(Config);
                 var hydrantId = caRequestID.Substring(0, 36);
                 _logger.LogTrace("Revoke: extracted UUID='{Uuid}'", hydrantId);
 
@@ -942,13 +929,16 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             }
         }
 
-        private async Task<Certificate> GetCertificateOnTimerAsync(string id)
+        internal int PollIntervalMs { get; set; } = 1000;
+        internal int PollTimeoutMs { get; set; } = 30000;
+
+        internal async Task<Certificate> GetCertificateOnTimerAsync(string id)
         {
             _logger.LogTrace("GetCertificateOnTimerAsync: waiting for certificate with tracking ID='{Id}'", id ?? "(null)");
             var stopwatch = Stopwatch.StartNew();
-            var client = new HydrantIdClient(Config);
+            var client = ClientFactory(Config);
 
-            while (stopwatch.Elapsed < TimeSpan.FromSeconds(30))
+            while (stopwatch.ElapsedMilliseconds < PollTimeoutMs)
             {
                 try
                 {
@@ -965,10 +955,10 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                         stopwatch.ElapsedMilliseconds, e.Message);
                 }
 
-                await Task.Delay(1000);
+                await Task.Delay(PollIntervalMs);
             }
 
-            _logger.LogWarning("GetCertificateOnTimerAsync: timed out after 30s for tracking ID='{Id}'", id ?? "(null)");
+            _logger.LogWarning("GetCertificateOnTimerAsync: timed out after {TimeoutMs}ms for tracking ID='{Id}'", PollTimeoutMs, id ?? "(null)");
             return null;
         }
 
@@ -976,7 +966,6 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
         {
             using var flow = new FlowLogger(_logger, $"GetSingleRecord({caRequestID ?? "null"})");
             _logger.MethodEntry();
-            _requestManager = new RequestManager();
             _logger.LogTrace("GetSingleRecord: caRequestID='{CaRequestId}'", caRequestID ?? "(null)");
 
             try
@@ -989,7 +978,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                         throw new ArgumentException($"caRequestID '{caRequestID}' is too short ({caRequestID.Length} chars) to extract a UUID.", nameof(caRequestID));
                 });
 
-                var client = new HydrantIdClient(Config);
+                var client = ClientFactory(Config);
                 var certId = caRequestID.Substring(0, 36);
                 _logger.LogTrace("GetSingleRecord: extracted UUID='{CertId}'", certId);
 

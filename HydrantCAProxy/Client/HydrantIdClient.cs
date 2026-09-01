@@ -32,9 +32,15 @@ using System.Globalization;
 
 namespace Keyfactor.HydrantId.Client
 {
-    public sealed class HydrantIdClient
+    public sealed class HydrantIdClient : IHydrantIdClient
     {
         private static readonly ILogger Log = LogHandler.GetClassLogger<HydrantIdClient>();
+        private readonly HttpMessageHandler _handler;
+
+        internal HydrantIdClient(IAnyCAPluginConfigProvider config, HttpMessageHandler handler) : this(config)
+        {
+            _handler = handler;
+        }
 
         public HydrantIdClient(IAnyCAPluginConfigProvider config)
         {
@@ -702,9 +708,9 @@ namespace Keyfactor.HydrantId.Client
                 var authorization =
                     $"id=\"{ApiId}\", ts=\"{ts}\", nonce=\"{nOnce}\", mac=\"{mac}\"";
 
-                var clientHandler = new HttpClientHandler();
+                var clientHandler = _handler ?? new HttpClientHandler();
 
-                var returnClient = new HttpClient(clientHandler, disposeHandler: true)
+                var returnClient = new HttpClient(clientHandler, disposeHandler: _handler == null)
                 {
                     BaseAddress = bUrl
                 };
@@ -722,16 +728,6 @@ namespace Keyfactor.HydrantId.Client
             }
         }
 
-        private static byte[] ConvertHexStringToBytes(string hex)
-        {
-            if (hex.Length % 2 != 0)
-                throw new ArgumentException("Invalid length for hex string.");
-
-            var bytes = new byte[hex.Length / 2];
-            for (int i = 0; i < bytes.Length; i++)
-                bytes[i] = Convert.ToByte(hex.Substring(i * 2, 2), 16);
-            return bytes;
-        }
     }
 
 }
