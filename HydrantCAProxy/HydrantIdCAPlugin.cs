@@ -854,6 +854,12 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                 var match = existingDomains.FirstOrDefault(d =>
                     string.Equals(d.DomainName, domainName, StringComparison.OrdinalIgnoreCase));
 
+                if (match == null && IsCoveredByValidatedAncestor(domainName, existingDomains, out var coveringDomain))
+                {
+                    flow.Step("DomainValidation.CoveredByValidatedParent", $"domain='{domainName}', parent='{coveringDomain}'");
+                    continue;
+                }
+
                 Domain domain;
                 if (match == null || match.Status == DomainStatusEnum.Expired)
                 {
@@ -895,6 +901,32 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                 string.Join("\n", pending.Select(p => $"  - {p.Domain}: {p.Instructions}"));
 
             return (false, message);
+        }
+
+        /// <summary>
+        /// True when <paramref name="domainName"/> is itself, or a subdomain of, some other domain
+        /// in <paramref name="existingDomains"/> that is already Validated -- per HydrantID's own
+        /// domain-validation documentation, DCV is scoped to the base domain and subdomains at any
+        /// depth are covered without a separate validation record.
+        /// </summary>
+        internal static bool IsCoveredByValidatedAncestor(string domainName, List<Domain> existingDomains, out string coveringDomain)
+        {
+            coveringDomain = null;
+
+            foreach (var candidate in existingDomains)
+            {
+                if (candidate.Status != DomainStatusEnum.Validated || string.IsNullOrEmpty(candidate.DomainName))
+                    continue;
+
+                if (string.Equals(domainName, candidate.DomainName, StringComparison.OrdinalIgnoreCase) ||
+                    domainName.EndsWith("." + candidate.DomainName, StringComparison.OrdinalIgnoreCase))
+                {
+                    coveringDomain = candidate.DomainName;
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         public async Task<int> Revoke(string caRequestID, string hexSerialNumber, uint revocationReason)

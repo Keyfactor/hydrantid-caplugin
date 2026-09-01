@@ -498,6 +498,66 @@ namespace HydrantCAProxy.Tests
         }
 
         [Fact]
+        public async Task EnsureDomainsValidatedAsync_SubdomainOfValidatedParent_SkipsWithoutCreatingRecord()
+        {
+            var plugin = new HydrantIdCAPlugin();
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>
+            {
+                new Domain { Id = "d1", DomainName = "keyfactorhydrantid.com", Status = DomainStatusEnum.Validated }
+            });
+
+            var result = await plugin.EnsureDomainsValidatedAsync(mockClient.Object, NewFlow(),
+                new List<string> { "www.keyfactorhydrantid.com" }, "IdenTrust");
+
+            Assert.True(result.AllValidated);
+            mockClient.Verify(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()), Times.Never);
+            mockClient.Verify(c => c.GetSubmitCheckDomainValidationAsync(It.IsAny<string>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task EnsureDomainsValidatedAsync_SubdomainOfPendingParent_StillCreatesOwnRecord()
+        {
+            var plugin = new HydrantIdCAPlugin();
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>
+            {
+                new Domain { Id = "d1", DomainName = "keyfactorhydrantid.com", Status = DomainStatusEnum.Pending }
+            });
+            mockClient.Setup(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()))
+                .ReturnsAsync(new Domain { Status = DomainStatusEnum.Validated });
+
+            var result = await plugin.EnsureDomainsValidatedAsync(mockClient.Object, NewFlow(),
+                new List<string> { "www.keyfactorhydrantid.com" }, "IdenTrust");
+
+            Assert.True(result.AllValidated);
+            mockClient.Verify(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()), Times.Once);
+        }
+
+        [Theory]
+        [InlineData("www.example.com", "example.com", true)]
+        [InlineData("a.b.example.com", "example.com", true)]
+        [InlineData("example.com", "example.com", true)]
+        [InlineData("notexample.com", "example.com", false)]
+        [InlineData("example.com.evil.com", "example.com", false)]
+        public void IsCoveredByValidatedAncestor_MatchesExpectedScope(string domainName, string validatedDomain, bool expected)
+        {
+            var existingDomains = new List<Domain> { new Domain { DomainName = validatedDomain, Status = DomainStatusEnum.Validated } };
+
+            var result = HydrantIdCAPlugin.IsCoveredByValidatedAncestor(domainName, existingDomains, out _);
+
+            Assert.Equal(expected, result);
+        }
+
+        [Fact]
+        public void IsCoveredByValidatedAncestor_ParentNotValidated_ReturnsFalse()
+        {
+            var existingDomains = new List<Domain> { new Domain { DomainName = "example.com", Status = DomainStatusEnum.Pending } };
+
+            Assert.False(HydrantIdCAPlugin.IsCoveredByValidatedAncestor("www.example.com", existingDomains, out _));
+        }
+
+        [Fact]
         public async Task EnsureDomainsValidatedAsync_MixedPendingAndValidated_AggregatesPendingMessage()
         {
             var plugin = new HydrantIdCAPlugin();
