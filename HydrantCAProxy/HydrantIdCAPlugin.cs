@@ -830,7 +830,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                     // domain name (does not create a duplicate record) against staging.
                     flow.Step("DomainValidation.CreateOrRegenerate",
                         $"domain='{domainName}', priorStatus={(match == null ? "(none)" : match.Status.ToString())}");
-                    var payload = _requestManager.GetCreateDomainValidationRequest(domainName, validatorId);
+                    var payload = _requestManager.GetCreateDomainValidationRequest(domainName, validatorId, _config?.HydrantIdAccountId);
                     domain = await client.GetSubmitCreateDomainValidationAsync(payload);
                 }
                 else if (match.Status != DomainStatusEnum.Validated)

@@ -368,13 +368,13 @@ namespace Keyfactor.HydrantId
             }
         }
 
-        public CreateDomainValidationPayload GetCreateDomainValidationRequest(string domain, string validatorId)
+        public CreateDomainValidationPayload GetCreateDomainValidationRequest(string domain, string validatorId, string accountId = null)
         {
             try
             {
                 Log.MethodEntry();
-                Log.LogTrace("GetCreateDomainValidationRequest: domain='{Domain}', validatorId='{ValidatorId}'",
-                    domain ?? "(null)", validatorId ?? "(null)");
+                Log.LogTrace("GetCreateDomainValidationRequest: domain='{Domain}', validatorId='{ValidatorId}', accountId='{AccountId}'",
+                    domain ?? "(null)", validatorId ?? "(null)", accountId ?? "(null)");
 
                 if (string.IsNullOrEmpty(domain))
                     throw new ArgumentNullException(nameof(domain), "domain cannot be null or empty.");
@@ -385,8 +385,11 @@ namespace Keyfactor.HydrantId
                 {
                     DomainName = domain,
                     Validator = validatorId,
-                    Method = ValidationMethod.Dns
-                    // AccountId intentionally omitted -- Hawk auth already scopes the account.
+                    Method = ValidationMethod.Dns,
+                    // Some HydrantId tenants require accountId on this call despite Hawk auth
+                    // already scoping the account -- omitted (not just blank) when not configured,
+                    // since CreateDomainValidationPayload.AccountId ignores null on serialization.
+                    AccountId = string.IsNullOrEmpty(accountId) ? null : accountId
                 };
 
                 Log.MethodExit();

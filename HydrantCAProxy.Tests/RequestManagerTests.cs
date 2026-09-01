@@ -357,6 +357,14 @@ namespace HydrantCAProxy.Tests
         }
 
         [Fact]
+        public void GetCreateDomainValidationRequest_AccountIdSupplied_SetsAccountId()
+        {
+            var result = _sut.GetCreateDomainValidationRequest("example.com", "validator-1", "account-123");
+
+            Assert.Equal("account-123", result.AccountId);
+        }
+
+        [Fact]
         public void GetCreateDomainValidationRequest_NullDomain_ThrowsArgumentNullException()
         {
             Assert.Throws<ArgumentNullException>(() => _sut.GetCreateDomainValidationRequest(null, "validator-1"));

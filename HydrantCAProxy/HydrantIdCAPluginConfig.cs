@@ -27,6 +27,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             public static string HydrantIdBaseUrl = "HydrantIdBaseUrl";
             public static string HydrantIdAuthId = "HydrantIdAuthId";
             public static string HydrantIdAuthKey = "HydrantIdAuthKey";
+            public static string HydrantIdAccountId = "HydrantIdAccountId";
             public static string DefaultPageSize = "DefaultPageSize";
             public static string Enabled = "Enabled";
         }
@@ -36,6 +37,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             public string HydrantIdBaseUrl { get; set; }
             public string HydrantIdAuthId { get; set; }
             public string HydrantIdAuthKey { get; set; }
+            public string HydrantIdAccountId { get; set; }
             public bool Enabled { get; set; }
         }
 
@@ -70,6 +72,13 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                     Hidden = true,
                     DefaultValue = "",
                     Type = "Secret"
+                },
+                [ConfigConstants.HydrantIdAccountId] = new PropertyConfigInfo()
+                {
+                    Comments = "Optional. Some HydrantId tenants require the account id to be included when creating a domain validation request (POST /domains/); leave blank if domain validation already works without it. Obtain from the HydrantId portal's account settings, HydrantId support, or the 'account.id' field on any existing certificate returned by the API.",
+                    Hidden = false,
+                    DefaultValue = "",
+                    Type = "String"
                 },
                 [ConfigConstants.Enabled] = new PropertyConfigInfo()
                 {
