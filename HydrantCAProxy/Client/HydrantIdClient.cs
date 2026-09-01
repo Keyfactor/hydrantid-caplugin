@@ -32,9 +32,15 @@ using System.Globalization;
 
 namespace Keyfactor.HydrantId.Client
 {
-    public sealed class HydrantIdClient
+    public sealed class HydrantIdClient : IHydrantIdClient
     {
         private static readonly ILogger Log = LogHandler.GetClassLogger<HydrantIdClient>();
+        private readonly HttpMessageHandler _handler;
+
+        internal HydrantIdClient(IAnyCAPluginConfigProvider config, HttpMessageHandler handler) : this(config)
+        {
+            _handler = handler;
+        }
 
         public HydrantIdClient(IAnyCAPluginConfigProvider config)
         {
@@ -232,6 +238,137 @@ namespace Keyfactor.HydrantId.Client
             catch (Exception e)
             {
                 Log.LogError(e, "GetPolicyList: exception: {Message}", e.Message);
+                throw;
+            }
+        }
+
+
+
+        public async Task<List<Domain>> GetDomainListAsync()
+        {
+            Log.MethodEntry();
+            var apiEndpoint = "/api/v2/domains/";
+            var fullUrl = BaseUrl + apiEndpoint;
+            Log.LogTrace("GetDomainListAsync: API Url={Url}", fullUrl);
+
+            var settings = new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore };
+
+            try
+            {
+                var restClient = ConfigureRestClient("get", fullUrl);
+                using var resp = await restClient.GetAsync(apiEndpoint);
+                var responseContent = await resp.Content.ReadAsStringAsync();
+
+                Log.LogTrace("GetDomainListAsync: HTTP status={StatusCode}, response length={Len}",
+                    resp.StatusCode, responseContent?.Length ?? 0);
+
+                if (!resp.IsSuccessStatusCode)
+                {
+                    Log.LogError("GetDomainListAsync: request failed with status {StatusCode}: {Response}", resp.StatusCode, responseContent);
+                    throw new HttpRequestException($"GetDomainListAsync failed with HTTP {resp.StatusCode}: {responseContent}");
+                }
+
+                var domains = JsonConvert.DeserializeObject<List<Domain>>(responseContent, settings);
+
+                if (domains == null)
+                {
+                    Log.LogWarning("GetDomainListAsync: deserialized domain list is null");
+                    return new List<Domain>();
+                }
+
+                Log.LogTrace("GetDomainListAsync: returned {Count} domains", domains.Count);
+                return domains;
+            }
+            catch (Exception e)
+            {
+                Log.LogError(e, "GetDomainListAsync: exception: {Message}", e.Message);
+                throw;
+            }
+        }
+
+
+
+        public async Task<Domain> GetSubmitCreateDomainValidationAsync(CreateDomainValidationPayload payload)
+        {
+            Log.MethodEntry();
+            Log.LogTrace("GetSubmitCreateDomainValidationAsync: payload is {Null}", payload == null ? "NULL" : "present");
+
+            if (payload == null)
+                throw new ArgumentNullException(nameof(payload), "payload cannot be null.");
+
+            var apiEndpoint = "/api/v2/domains/";
+            var fullUrl = BaseUrl + apiEndpoint;
+            Log.LogTrace("GetSubmitCreateDomainValidationAsync: API Url={Url}", fullUrl);
+
+            var json = JsonConvert.SerializeObject(payload);
+            Log.LogTrace("GetSubmitCreateDomainValidationAsync: request JSON: {Json}", json);
+
+            var settings = new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore };
+
+            try
+            {
+                var restClient = ConfigureRestClient("post", fullUrl);
+                using var resp = await restClient.PostAsync(apiEndpoint, new StringContent(json, Encoding.UTF8, "application/json"));
+                var responseContent = await resp.Content.ReadAsStringAsync();
+
+                Log.LogTrace("GetSubmitCreateDomainValidationAsync: HTTP status={StatusCode}, response length={Len}",
+                    resp.StatusCode, responseContent?.Length ?? 0);
+
+                if (!resp.IsSuccessStatusCode)
+                {
+                    Log.LogError("GetSubmitCreateDomainValidationAsync: request failed with status {StatusCode}: {Response}", resp.StatusCode, responseContent);
+                    throw new HttpRequestException($"GetSubmitCreateDomainValidationAsync failed with HTTP {resp.StatusCode}: {responseContent}");
+                }
+
+                var domain = JsonConvert.DeserializeObject<Domain>(responseContent, settings);
+                Log.LogTrace("GetSubmitCreateDomainValidationAsync: response JSON: {Json}", JsonConvert.SerializeObject(domain));
+                return domain;
+            }
+            catch (Exception e)
+            {
+                Log.LogError(e, "GetSubmitCreateDomainValidationAsync: exception: {Message}", e.Message);
+                throw;
+            }
+        }
+
+
+
+        public async Task<Domain> GetSubmitCheckDomainValidationAsync(string domainId)
+        {
+            Log.MethodEntry();
+            Log.LogTrace("GetSubmitCheckDomainValidationAsync: domainId='{DomainId}'", domainId ?? "(null)");
+
+            if (string.IsNullOrEmpty(domainId))
+                throw new ArgumentNullException(nameof(domainId), "domainId cannot be null or empty.");
+
+            var apiEndpoint = $"/api/v2/domains/{domainId}/validate";
+            var fullUrl = BaseUrl + apiEndpoint;
+            Log.LogTrace("GetSubmitCheckDomainValidationAsync: API Url={Url}", fullUrl);
+
+            var settings = new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore };
+
+            try
+            {
+                var restClient = ConfigureRestClient("get", fullUrl);
+                using var resp = await restClient.GetAsync(apiEndpoint);
+                var responseContent = await resp.Content.ReadAsStringAsync();
+
+                Log.LogTrace("GetSubmitCheckDomainValidationAsync: HTTP status={StatusCode}, response length={Len}",
+                    resp.StatusCode, responseContent?.Length ?? 0);
+
+                if (!resp.IsSuccessStatusCode)
+                {
+                    Log.LogError("GetSubmitCheckDomainValidationAsync: request failed with status {StatusCode}: {Response}", resp.StatusCode, responseContent);
+                    throw new HttpRequestException($"GetSubmitCheckDomainValidationAsync failed with HTTP {resp.StatusCode}: {responseContent}");
+                }
+
+                var domain = JsonConvert.DeserializeObject<Domain>(responseContent, settings);
+                Log.LogTrace("GetSubmitCheckDomainValidationAsync: response JSON: {Json}", JsonConvert.SerializeObject(domain));
+                return domain;
+            }
+            catch (Exception e)
+            {
+                Log.LogError(e, "GetSubmitCheckDomainValidationAsync: exception: {Message}", e.Message);
                 throw;
             }
         }
@@ -571,9 +708,9 @@ namespace Keyfactor.HydrantId.Client
                 var authorization =
                     $"id=\"{ApiId}\", ts=\"{ts}\", nonce=\"{nOnce}\", mac=\"{mac}\"";
 
-                var clientHandler = new HttpClientHandler();
+                var clientHandler = _handler ?? new HttpClientHandler();
 
-                var returnClient = new HttpClient(clientHandler, disposeHandler: true)
+                var returnClient = new HttpClient(clientHandler, disposeHandler: _handler == null)
                 {
                     BaseAddress = bUrl
                 };
@@ -591,16 +728,6 @@ namespace Keyfactor.HydrantId.Client
             }
         }
 
-        private static byte[] ConvertHexStringToBytes(string hex)
-        {
-            if (hex.Length % 2 != 0)
-                throw new ArgumentException("Invalid length for hex string.");
-
-            var bytes = new byte[hex.Length / 2];
-            for (int i = 0; i < bytes.Length; i++)
-                bytes[i] = Convert.ToByte(hex.Substring(i * 2, 2), 16);
-            return bytes;
-        }
     }
 
 }
