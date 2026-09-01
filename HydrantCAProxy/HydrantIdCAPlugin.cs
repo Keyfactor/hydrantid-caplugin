@@ -104,8 +104,9 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                 }
                 return token.ToString(Newtonsoft.Json.Formatting.None);
             }
-            catch
+            catch (Exception ex)
             {
+                _logger.LogTrace("MaskConfigForLog: failed to parse config JSON for masking, redacting entire payload: {Message}", ex.Message);
                 return "***REDACTED***";
             }
         }
@@ -145,8 +146,18 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                     return;
                 }
 
-                flow.Step("PingCA");
                 _logger.LogDebug("Pinging HydrantId to validate connection");
+                var client = new HydrantIdClient(Config);
+                var reachable = await client.Ping();
+
+                if (!reachable)
+                {
+                    flow.Fail("PingCA", "GET /policies did not return a success status");
+                    _logger.LogError("Ping: HydrantId connectivity check failed -- GET /policies did not return a success status.");
+                    throw new Exception("HydrantId connectivity check failed.");
+                }
+
+                flow.Step("PingCA", "connectivity verified");
             }
             finally
             {
@@ -814,23 +825,35 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                     string.Equals(d.DomainName, domainName, StringComparison.OrdinalIgnoreCase));
 
                 Domain domain;
-                if (match == null)
+                if (match == null || match.Status == DomainStatusEnum.Expired)
                 {
+                    // HydrantID's "regenerate code" action for an expired domain is the same
+                    // POST used to start a validation from scratch -- confirmed idempotent per
+                    // domain name (does not create a duplicate record) against staging.
+                    flow.Step("DomainValidation.CreateOrRegenerate",
+                        $"domain='{domainName}', priorStatus={(match == null ? "(none)" : match.Status.ToString())}");
                     var payload = _requestManager.GetCreateDomainValidationRequest(domainName, validatorId);
                     domain = await client.GetSubmitCreateDomainValidationAsync(payload);
                 }
                 else if (match.Status != DomainStatusEnum.Validated)
                 {
+                    flow.Step("DomainValidation.Recheck", $"domain='{domainName}', status={match.Status}, domainId='{match.Id}'");
                     domain = await client.GetSubmitCheckDomainValidationAsync(match.Id);
                 }
                 else
                 {
+                    flow.Step("DomainValidation.AlreadyValidated", $"domain='{domainName}'");
                     continue;
                 }
 
                 if (domain?.Status != DomainStatusEnum.Validated)
                 {
+                    flow.Step("DomainValidation.StillPending", $"domain='{domainName}', status={domain?.Status.ToString() ?? "(null response)"}");
                     pending.Add((domainName, domain?.CodeInstructions ?? "(no instructions returned by HydrantId)"));
+                }
+                else
+                {
+                    flow.Step("DomainValidation.NowValidated", $"domain='{domainName}'");
                 }
             }
 

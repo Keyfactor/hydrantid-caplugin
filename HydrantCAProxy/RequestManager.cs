@@ -273,8 +273,7 @@ namespace Keyfactor.HydrantId
                         validity.Days = units;
                         break;
                     default:
-                        Log.LogWarning("GetValidity: unrecognized period '{Period}', no validity set", period);
-                        break;
+                        throw new ArgumentException($"Unrecognized validity period '{period}'; expected 'Years', 'Months', or 'Days'.", nameof(period));
                 }
 
                 return validity;
