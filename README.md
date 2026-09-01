@@ -203,6 +203,7 @@ The plugin supports the following standard CRL revocation reasons:
         | **HydrantIdBaseUrl** | Full URL to the HydrantId API endpoint | Yes | `https://acm.hydrantid.com` or `https://acm-stage.hydrantid.com` |
         | **HydrantIdAuthId** | API Authentication ID provided by HydrantId | Yes | `your-auth-id` |
         | **HydrantIdAuthKey** | API Authentication Key provided by HydrantId | Yes | `your-secret-auth-key` |
+        | **HydrantIdAccountId** | Account id required by some HydrantId tenants when creating a domain validation request (`POST /domains/`) as part of enrollment against a policy with a validator configured. Leave blank if domain validation already succeeds without it — if left blank and it turns out to be required, domain validation creation fails with `{"message":"Error: unauthorized","status":"Failure"}`. Obtain from the HydrantId portal's account settings, HydrantId support, or the `account.id` field on any existing certificate returned by the API. | No | `aba34551-51e9-4cb3-a5b8-895d64d45344` |
         
         ### Gateway Registration Notes
         
@@ -233,6 +234,7 @@ The plugin supports the following standard CRL revocation reasons:
         * **HydrantIdBaseUrl** - The base URL for the HydrantId API endpoint. For example, `https://acm.hydrantid.com` or `https://acm-stage.hydrantid.com`.
         * **HydrantIdAuthId** - The API Authentication ID provided by HydrantId for API access.
         * **HydrantIdAuthKey** - The API Authentication Key (secret) provided by HydrantId for API access.
+        * **HydrantIdAccountId** - Optional. Required by some HydrantId tenants for domain validation to succeed; see the table above.
         
         2. **Certificate Template Configuration**
         
