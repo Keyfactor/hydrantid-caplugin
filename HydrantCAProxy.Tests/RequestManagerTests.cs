@@ -365,6 +365,24 @@ namespace HydrantCAProxy.Tests
         }
 
         [Fact]
+        public void GetCreateDomainValidationRequest_OrgPayloadSupplied_SetsPayload()
+        {
+            var orgPayload = new DomainValidationOrgPayload { OrgName = "Acme Corp", EmailAddress = "admin@acme.com" };
+
+            var result = _sut.GetCreateDomainValidationRequest("example.com", "validator-1", orgPayload: orgPayload);
+
+            Assert.Same(orgPayload, result.Payload);
+        }
+
+        [Fact]
+        public void GetCreateDomainValidationRequest_NoOrgPayload_PayloadRemainsNull()
+        {
+            var result = _sut.GetCreateDomainValidationRequest("example.com", "validator-1");
+
+            Assert.Null(result.Payload);
+        }
+
+        [Fact]
         public void GetCreateDomainValidationRequest_NullDomain_ThrowsArgumentNullException()
         {
             Assert.Throws<ArgumentNullException>(() => _sut.GetCreateDomainValidationRequest(null, "validator-1"));

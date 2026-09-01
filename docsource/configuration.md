@@ -158,6 +158,12 @@ When registering the HydrantId CA in the AnyCA Gateway, you'll need to provide t
 | **HydrantIdAuthId** | API Authentication ID provided by HydrantId | Yes | `your-auth-id` |
 | **HydrantIdAuthKey** | API Authentication Key provided by HydrantId | Yes | `your-secret-auth-key` |
 | **HydrantIdAccountId** | Account id required by some HydrantId tenants when creating a domain validation request (`POST /domains/`) as part of enrollment against a policy with a validator configured. Leave blank if domain validation already succeeds without it — if left blank and it turns out to be required, domain validation creation fails with `{"message":"Error: unauthorized","status":"Failure"}`. Obtain from the HydrantId portal's account settings, HydrantId support, or the `account.id` field on any existing certificate returned by the API. | No | `aba34551-51e9-4cb3-a5b8-895d64d45344` |
+| **HydrantIdOrgName** | Organization name required by some HydrantId validators (e.g. IdenTrust) on domain validation requests. Leave blank if your validator doesn't need it — check `GET /api/v2/domains/validators`'s `requiredPayload` for the validator in use; a non-empty `requiredPayload` means these fields are needed. If required and left blank, domain validation creation fails with `{"message":"The domain request is missing the organization name","status":"Failure"}`. | No | `Acme Corp` |
+| **HydrantIdOrgPrimaryContactFullName** | Organization primary contact full name, paired with HydrantIdOrgName. | No | `Jane Doe` |
+| **HydrantIdOrgStreetAddress** | Organization street address, paired with HydrantIdOrgName. | No | `123 Main St` |
+| **HydrantIdOrgCityProvPostalCodeCountry** | Organization city/province/postal code/country, paired with HydrantIdOrgName. | No | `Anytown, OH 44131, US` |
+| **HydrantIdEmailAddress** | Organization contact email address, paired with HydrantIdOrgName. | No | `jane@acme.com` |
+| **HydrantIdPhoneNumber** | Organization contact phone number, paired with HydrantIdOrgName. | No | `+1-555-555-0100` |
 
 ### Gateway Registration Notes
 
@@ -189,6 +195,7 @@ Populate using the configuration fields collected in the [requirements](#require
 * **HydrantIdAuthId** - The API Authentication ID provided by HydrantId for API access.
 * **HydrantIdAuthKey** - The API Authentication Key (secret) provided by HydrantId for API access.
 * **HydrantIdAccountId** - Optional. Required by some HydrantId tenants for domain validation to succeed; see the table above.
+* **HydrantIdOrgName**, **HydrantIdOrgPrimaryContactFullName**, **HydrantIdOrgStreetAddress**, **HydrantIdOrgCityProvPostalCodeCountry**, **HydrantIdEmailAddress**, **HydrantIdPhoneNumber** - Optional. Required by some domain validators (e.g. IdenTrust); see the table above.
 
 2. **Certificate Template Configuration**
 

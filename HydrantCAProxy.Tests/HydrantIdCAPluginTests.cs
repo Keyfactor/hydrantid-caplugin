@@ -520,6 +520,86 @@ namespace HydrantCAProxy.Tests
         }
 
         // ---------------------------------------------------------------------
+        // BuildOrgPayload
+        // ---------------------------------------------------------------------
+
+        [Fact]
+        public void BuildOrgPayload_NoOrgFieldsConfigured_ReturnsNull()
+        {
+            var plugin = MakePlugin();
+
+            Assert.Null(plugin.BuildOrgPayload());
+        }
+
+        [Fact]
+        public void BuildOrgPayload_ConfigNeverInitialized_ReturnsNull()
+        {
+            var plugin = new HydrantIdCAPlugin();
+
+            Assert.Null(plugin.BuildOrgPayload());
+        }
+
+        [Fact]
+        public void BuildOrgPayload_OneFieldConfigured_ReturnsPopulatedPayload()
+        {
+            var data = ValidConnectionData();
+            data[HydrantIdCAPluginConfig.ConfigConstants.HydrantIdOrgName] = "Acme Corp";
+            var plugin = new HydrantIdCAPlugin();
+            plugin.Initialize(new FakeConfigProvider { CAConnectionData = data }, Mock.Of<ICertificateDataReader>());
+
+            var payload = plugin.BuildOrgPayload();
+
+            Assert.NotNull(payload);
+            Assert.Equal("Acme Corp", payload.OrgName);
+            Assert.Null(payload.EmailAddress);
+        }
+
+        [Fact]
+        public void BuildOrgPayload_AllFieldsConfigured_ReturnsFullyPopulatedPayload()
+        {
+            var data = ValidConnectionData();
+            data[HydrantIdCAPluginConfig.ConfigConstants.HydrantIdOrgName] = "Acme Corp";
+            data[HydrantIdCAPluginConfig.ConfigConstants.HydrantIdOrgPrimaryContactFullName] = "Jane Doe";
+            data[HydrantIdCAPluginConfig.ConfigConstants.HydrantIdOrgStreetAddress] = "123 Main St";
+            data[HydrantIdCAPluginConfig.ConfigConstants.HydrantIdOrgCityProvPostalCodeCountry] = "Anytown, OH 44131, US";
+            data[HydrantIdCAPluginConfig.ConfigConstants.HydrantIdEmailAddress] = "jane@acme.com";
+            data[HydrantIdCAPluginConfig.ConfigConstants.HydrantIdPhoneNumber] = "+1-555-555-0100";
+            var plugin = new HydrantIdCAPlugin();
+            plugin.Initialize(new FakeConfigProvider { CAConnectionData = data }, Mock.Of<ICertificateDataReader>());
+
+            var payload = plugin.BuildOrgPayload();
+
+            Assert.Equal("Acme Corp", payload.OrgName);
+            Assert.Equal("Jane Doe", payload.OrgPrimaryContactFullName);
+            Assert.Equal("123 Main St", payload.OrgStreetAddress);
+            Assert.Equal("Anytown, OH 44131, US", payload.OrgCityProvPostalCodeCountry);
+            Assert.Equal("jane@acme.com", payload.EmailAddress);
+            Assert.Equal("+1-555-555-0100", payload.PhoneNumber);
+        }
+
+        [Fact]
+        public async Task EnsureDomainsValidatedAsync_OrgPayloadConfigured_IsIncludedInCreateRequest()
+        {
+            var data = ValidConnectionData();
+            data[HydrantIdCAPluginConfig.ConfigConstants.HydrantIdOrgName] = "Acme Corp";
+            var plugin = new HydrantIdCAPlugin();
+            plugin.Initialize(new FakeConfigProvider { CAConnectionData = data }, Mock.Of<ICertificateDataReader>());
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>());
+            CreateDomainValidationPayload capturedPayload = null;
+            mockClient.Setup(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()))
+                .Callback<CreateDomainValidationPayload>(p => capturedPayload = p)
+                .ReturnsAsync(new Domain { Status = DomainStatusEnum.Validated });
+            plugin.ClientFactory = _ => mockClient.Object;
+
+            await plugin.EnsureDomainsValidatedAsync(mockClient.Object, NewFlow(), new List<string> { "new.example.com" }, "IdenTrust");
+
+            Assert.NotNull(capturedPayload.Payload);
+            Assert.IsType<DomainValidationOrgPayload>(capturedPayload.Payload);
+            Assert.Equal("Acme Corp", ((DomainValidationOrgPayload)capturedPayload.Payload).OrgName);
+        }
+
+        // ---------------------------------------------------------------------
         // Synchronize
         // ---------------------------------------------------------------------
 

@@ -804,6 +804,38 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
         }
 
         /// <summary>
+        /// Builds the org/contact "payload" some HydrantID validators (e.g. IdenTrust) require on
+        /// domain validation creation, from the optional Hydrant Id* config fields. Returns null
+        /// (and therefore omits "payload" from the request entirely) when none are configured, so
+        /// validators that don't need it (e.g. DigiCert, PrivateCA) are unaffected.
+        /// </summary>
+        internal DomainValidationOrgPayload BuildOrgPayload()
+        {
+            if (_config == null)
+                return null;
+
+            if (string.IsNullOrEmpty(_config.HydrantIdOrgName) &&
+                string.IsNullOrEmpty(_config.HydrantIdOrgPrimaryContactFullName) &&
+                string.IsNullOrEmpty(_config.HydrantIdOrgStreetAddress) &&
+                string.IsNullOrEmpty(_config.HydrantIdOrgCityProvPostalCodeCountry) &&
+                string.IsNullOrEmpty(_config.HydrantIdEmailAddress) &&
+                string.IsNullOrEmpty(_config.HydrantIdPhoneNumber))
+            {
+                return null;
+            }
+
+            return new DomainValidationOrgPayload
+            {
+                OrgName = _config.HydrantIdOrgName,
+                OrgPrimaryContactFullName = _config.HydrantIdOrgPrimaryContactFullName,
+                OrgStreetAddress = _config.HydrantIdOrgStreetAddress,
+                OrgCityProvPostalCodeCountry = _config.HydrantIdOrgCityProvPostalCodeCountry,
+                EmailAddress = _config.HydrantIdEmailAddress,
+                PhoneNumber = _config.HydrantIdPhoneNumber
+            };
+        }
+
+        /// <summary>
         /// Checks each domain against HydrantID's Domains resource, starting DNS validation for any
         /// domain that has not been requested yet and re-checking any domain that is still pending.
         /// Command re-invokes Enroll() from scratch on resubmit, and this plugin has no local state
@@ -830,7 +862,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                     // domain name (does not create a duplicate record) against staging.
                     flow.Step("DomainValidation.CreateOrRegenerate",
                         $"domain='{domainName}', priorStatus={(match == null ? "(none)" : match.Status.ToString())}");
-                    var payload = _requestManager.GetCreateDomainValidationRequest(domainName, validatorId, _config?.HydrantIdAccountId);
+                    var payload = _requestManager.GetCreateDomainValidationRequest(domainName, validatorId, _config?.HydrantIdAccountId, BuildOrgPayload());
                     domain = await client.GetSubmitCreateDomainValidationAsync(payload);
                 }
                 else if (match.Status != DomainStatusEnum.Validated)
