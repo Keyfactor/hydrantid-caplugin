@@ -157,6 +157,13 @@ When registering the HydrantId CA in the AnyCA Gateway, you'll need to provide t
 | **HydrantIdBaseUrl** | Full URL to the HydrantId API endpoint | Yes | `https://acm.hydrantid.com` or `https://acm-stage.hydrantid.com` |
 | **HydrantIdAuthId** | API Authentication ID provided by HydrantId | Yes | `your-auth-id` |
 | **HydrantIdAuthKey** | API Authentication Key provided by HydrantId | Yes | `your-secret-auth-key` |
+| **HydrantIdAccountId** | Account id required by some HydrantId tenants when creating a domain validation request (`POST /domains/`) as part of enrollment against a policy with a validator configured. Leave blank if domain validation already succeeds without it — if left blank and it turns out to be required, domain validation creation fails with `{"message":"Error: unauthorized","status":"Failure"}`. Obtain from the HydrantId portal's account settings, HydrantId support, or the `account.id` field on any existing certificate returned by the API. | No | `aba34551-51e9-4cb3-a5b8-895d64d45344` |
+| **HydrantIdOrgName** | Organization name required by some HydrantId validators (e.g. IdenTrust) on domain validation requests. Leave blank if your validator doesn't need it — check `GET /api/v2/domains/validators`'s `requiredPayload` for the validator in use; a non-empty `requiredPayload` means these fields are needed. If required and left blank, domain validation creation fails with `{"message":"The domain request is missing the organization name","status":"Failure"}`. | No | `Acme Corp` |
+| **HydrantIdOrgPrimaryContactFullName** | Organization primary contact full name, paired with HydrantIdOrgName. | No | `Jane Doe` |
+| **HydrantIdOrgStreetAddress** | Organization street address, paired with HydrantIdOrgName. | No | `123 Main St` |
+| **HydrantIdOrgCityProvPostalCodeCountry** | Organization city/province/postal code/country, paired with HydrantIdOrgName. | No | `Anytown, OH 44131, US` |
+| **HydrantIdEmailAddress** | Organization contact email address, paired with HydrantIdOrgName. | No | `jane@acme.com` |
+| **HydrantIdPhoneNumber** | Organization contact phone number, paired with HydrantIdOrgName. | No | `+1-555-555-0100` |
 
 ### Gateway Registration Notes
 
@@ -187,6 +194,8 @@ Populate using the configuration fields collected in the [requirements](#require
 * **HydrantIdBaseUrl** - The base URL for the HydrantId API endpoint. For example, `https://acm.hydrantid.com` or `https://acm-stage.hydrantid.com`.
 * **HydrantIdAuthId** - The API Authentication ID provided by HydrantId for API access.
 * **HydrantIdAuthKey** - The API Authentication Key (secret) provided by HydrantId for API access.
+* **HydrantIdAccountId** - Optional. Required by some HydrantId tenants for domain validation to succeed; see the table above.
+* **HydrantIdOrgName**, **HydrantIdOrgPrimaryContactFullName**, **HydrantIdOrgStreetAddress**, **HydrantIdOrgCityProvPostalCodeCountry**, **HydrantIdEmailAddress**, **HydrantIdPhoneNumber** - Optional. Required by some domain validators (e.g. IdenTrust); see the table above.
 
 2. **Certificate Template Configuration**
 
@@ -223,3 +232,89 @@ Populate using the configuration fields collected in the [requirements](#require
   - RenewalDays determines the behavior for certificate renewal:
     - Within window: Performs a renewal operation (maintains certificate lineage)
     - Outside window: Performs a re-issue operation (new certificate enrollment)
+
+## Functional Test Plan
+
+The test cases below are written as manual steps to run through the Keyfactor Command UI against a configured HydrantId CA, so a tester can execute them and record Pass/Fail results. They exercise the same code paths the plugin implements: connectivity/config validation, enrollment (with and without domain control validation), renewal vs. re-issue selection, revocation, and CA synchronization.
+
+> **Note on DCV and policy type**: whether an enrollment requires domain control validation (DCV) is driven entirely by whether the matched HydrantId policy has a `validator` configured (e.g. IdenTrust, DigiCert, PrivateCA) — not by the policy's CA type. EJBCA policies typically have no validator configured (since they aren't publicly-trusted CAs subject to CA/Browser Forum DCV requirements), which is why they issue directly with no DNS step. If a validator is ever configured on a non-public-CA policy, the plugin will still attempt DCV for it.
+
+### A. Connectivity / Configuration
+
+| # | Test Case | Steps in Command | Expected Result |
+|---|---|---|---|
+| A1 | Valid connection test | CAs > add/edit HydrantId CA > enter valid `HydrantIdBaseUrl`, `HydrantIdAuthId`, `HydrantIdAuthKey` > Save/Test Connection | Connection succeeds (calls `Ping` → `GET /policies`) |
+| A2 | Invalid AuthKey | Same as A1 but with a wrong `HydrantIdAuthKey` | Test Connection fails with a clear auth error, not a silent success |
+| A3 | Missing required field | Leave `HydrantIdBaseUrl` blank, attempt Save | Save is rejected with a validation message naming the missing field(s) |
+| A4 | CA disabled | Set `Enabled = false` on the CA config, Save | Save succeeds; connectivity/config validation is skipped (no error), consistent with a deliberately paused CA |
+| A5 | Product/policy list populates | Open the Certificate Template mapping / "Available Templates" picker for this CA | List of HydrantId policies (EJBCA + any IdenTrust/DigiCert/PrivateCA policies) appears by name |
+
+### B. Enrollment — policy has no validator configured (all current EJBCA policies)
+
+Confirm via the policy list that `details.validator` is unset for the policy under test — this is what actually determines the no-DCV path, not the EJBCA type itself.
+
+| # | Test Case | Steps | Expected Result |
+|---|---|---|---|
+| B1 | New enrollment, CSR | Enrollment > CSR Enrollment, select a Template mapped to a no-validator policy, submit a valid CSR | Certificate issues immediately (no DCV step); status shows Issued/Generated |
+| B2 | New enrollment, PFX | Enrollment > PFX Enrollment, same policy | Certificate + private key returned; status Issued |
+| B3 | Enrollment with SANs | Submit CSR with multiple DNS SANs against the same policy | All SANs present on issued cert |
+| B4 | Enrollment against unmapped Product ID | Submit against a Template whose Product ID doesn't match any HydrantId policy name | Enrollment fails with "no policy found matching ProductID" — not a crash/500 |
+| B5 | Enrollment with missing/invalid ValidityPeriod annotation | Submit against an unsaved/never-configured Template (annotation defaults only) | Falls back to annotation default (Years/1) rather than failing |
+
+### C. Enrollment — policy has a validator configured (IdenTrust / DigiCert / PrivateCA)
+
+| # | Test Case | Steps | Expected Result |
+|---|---|---|---|
+| C1 | First-time enrollment, domain never validated | CSR Enrollment against a policy with `validator` set, for a domain never validated before | Enrollment returns pending/"external validation" with DNS TXT record instructions in the status message — no cert issued yet |
+| C2 | Publish TXT, resubmit | Publish the TXT record from C1 in real DNS, resubmit the same enrollment | Domain validates, certificate issues |
+| C3 | Re-enroll same domain (already validated) | Submit a second CSR for the same already-validated domain | No new DCV required — issues directly (domain trust is reused while still valid) |
+| C4 | Enroll for a subdomain of an already-validated domain | Use a subdomain (e.g. `www.example.com`) of a domain already `Validated` in the Domains list, same validator | Issues directly with no new domain validation record created — the plugin treats it as covered by the validated parent |
+| C4b | Enroll for a subdomain of a still-pending (not yet validated) parent | Same as C4, but the parent domain's own validation is still `Pending` | Creates its own separate validation record for the subdomain (parent coverage only applies once the parent is actually `Validated`) |
+| C5 | Never publish the TXT record | Same as C1 but don't publish the record, resubmit later | Stays pending; status message still shows the same/valid instructions, doesn't error |
+| C6 | Domain validation expires mid-lifecycle (IdenTrust ~200 days) | Not practically testable end-to-end in a short QA pass — mark "not testable this cycle" unless a naturally-expired domain is available in the environment | Enrollment restarts DCV rather than getting stuck on a dead validation record |
+
+### D. Renewal
+
+| # | Test Case | Steps | Expected Result |
+|---|---|---|---|
+| D1 | Renew within RenewalDays window | Certificate Search > select a cert issued in B1/B3, close to expiry (or lower the Template's `RenewalDays` for testing) > Renew | Goes through the renewal path (reuses/updates same HydrantId cert record); new cert issued |
+| D2 | Renew outside RenewalDays window | Renew a cert with plenty of validity left | Goes through the reissue path instead (new CSR against matched policy) |
+| D3 | Renew with DCV policy, domain still valid | Renew a cert from the C-series tests | No DCV re-prompt, issues directly |
+| D4 | Renew with `reuseCsr` scenario | If Command supports "renew without new CSR" for this Template | New cert issued reusing prior key/CSR per the policy's `renewCanReuseCSR` setting |
+
+### E. Reissue
+
+| # | Test Case | Steps | Expected Result |
+|---|---|---|---|
+| E1 | Reissue outside renewal window | Reissue a long-lived cert | New CSR submitted against the matched policy; new cert issued |
+| E2 | Reissue where policy no longer exists/renamed | Reissue a cert whose original Template's policy was removed/renamed in HydrantId | Fails cleanly with "no policy found matching ProductID", not a crash |
+| E3 | Reissue with pending DCV | Reissue for a domain whose validation just expired/was deleted in HydrantId | Returns external-validation-pending, same as C1 |
+
+### F. Revocation
+
+| # | Test Case | Steps | Expected Result |
+|---|---|---|---|
+| F1 | Revoke, unspecified reason | Certificate Search > select an issued cert > Revoke > reason "Unspecified" | Cert shows Revoked in both Command and the HydrantId portal |
+| F2 | Revoke, key compromise | Revoke another cert with reason "Key Compromise" | Revoked; reason recorded correctly on the HydrantId side |
+| F3 | Revoke already-revoked cert | Attempt to revoke F1's cert again | Fails/no-ops gracefully, no crash |
+| F4 | Revoke cert not found in HydrantId | Revoke using a bad/stale CARequestID (if reproducible) | Clear error, not an unhandled exception |
+
+### G. Synchronization / Inventory
+
+| # | Test Case | Steps | Expected Result |
+|---|---|---|---|
+| G1 | Full sync | Orchestrators/Scheduled Jobs > run a full sync for this CA | All previously issued certs (B, C, D, E series) appear in Command's certificate inventory with correct status |
+| G2 | Incremental sync | Issue/revoke one more cert, run an incremental sync | Only the delta is reflected; sync completes without re-processing everything |
+| G3 | Sync reflects revocation | After F1's revoke, run sync | That cert's status updates to Revoked in Command if not already updated at revoke time |
+| G4 | Sync with a large result set | If the HydrantId account has more than 100 certs | Paging completes without missing/duplicating certs |
+| G5 | Sync cancellation | Start a sync and cancel it mid-run (if Command exposes this) | Job stops cleanly, no hung state |
+
+### H. Negative / edge cases
+
+| # | Test Case | Steps | Expected Result |
+|---|---|---|---|
+| H1 | Submit malformed CSR | CSR Enrollment with a truncated/corrupt CSR | Clear validation failure, not a 500 |
+| H2 | Enroll while CA is Disabled | Set CA `Enabled=false`, attempt enrollment | Fails/blocked consistent with disabled state |
+| H3 | Network/HydrantId outage simulated | Point `HydrantIdBaseUrl` at an unreachable host, attempt any operation | Fails with a clear connectivity error, not a hang |
+
+**Prerequisites for the C-series tests**: a domain you actually control DNS for, so you can publish the real TXT records HydrantId returns.
