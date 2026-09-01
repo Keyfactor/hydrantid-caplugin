@@ -27,6 +27,13 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             public static string HydrantIdBaseUrl = "HydrantIdBaseUrl";
             public static string HydrantIdAuthId = "HydrantIdAuthId";
             public static string HydrantIdAuthKey = "HydrantIdAuthKey";
+            public static string HydrantIdAccountId = "HydrantIdAccountId";
+            public static string HydrantIdOrgName = "HydrantIdOrgName";
+            public static string HydrantIdOrgPrimaryContactFullName = "HydrantIdOrgPrimaryContactFullName";
+            public static string HydrantIdOrgStreetAddress = "HydrantIdOrgStreetAddress";
+            public static string HydrantIdOrgCityProvPostalCodeCountry = "HydrantIdOrgCityProvPostalCodeCountry";
+            public static string HydrantIdEmailAddress = "HydrantIdEmailAddress";
+            public static string HydrantIdPhoneNumber = "HydrantIdPhoneNumber";
             public static string DefaultPageSize = "DefaultPageSize";
             public static string Enabled = "Enabled";
         }
@@ -36,6 +43,13 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             public string HydrantIdBaseUrl { get; set; }
             public string HydrantIdAuthId { get; set; }
             public string HydrantIdAuthKey { get; set; }
+            public string HydrantIdAccountId { get; set; }
+            public string HydrantIdOrgName { get; set; }
+            public string HydrantIdOrgPrimaryContactFullName { get; set; }
+            public string HydrantIdOrgStreetAddress { get; set; }
+            public string HydrantIdOrgCityProvPostalCodeCountry { get; set; }
+            public string HydrantIdEmailAddress { get; set; }
+            public string HydrantIdPhoneNumber { get; set; }
             public bool Enabled { get; set; }
         }
 
@@ -70,6 +84,55 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                     Hidden = true,
                     DefaultValue = "",
                     Type = "Secret"
+                },
+                [ConfigConstants.HydrantIdAccountId] = new PropertyConfigInfo()
+                {
+                    Comments = "Optional. Some HydrantId tenants require the account id to be included when creating a domain validation request (POST /domains/); leave blank if domain validation already works without it. Obtain from the HydrantId portal's account settings, HydrantId support, or the 'account.id' field on any existing certificate returned by the API.",
+                    Hidden = false,
+                    DefaultValue = "",
+                    Type = "String"
+                },
+                [ConfigConstants.HydrantIdOrgName] = new PropertyConfigInfo()
+                {
+                    Comments = "Optional. Organization name required by some HydrantId validators (e.g. IdenTrust) on domain validation requests. Leave blank if not required by your validator -- omitted from the request entirely when blank.",
+                    Hidden = false,
+                    DefaultValue = "",
+                    Type = "String"
+                },
+                [ConfigConstants.HydrantIdOrgPrimaryContactFullName] = new PropertyConfigInfo()
+                {
+                    Comments = "Optional. Organization primary contact full name required by some HydrantId validators (e.g. IdenTrust) on domain validation requests.",
+                    Hidden = false,
+                    DefaultValue = "",
+                    Type = "String"
+                },
+                [ConfigConstants.HydrantIdOrgStreetAddress] = new PropertyConfigInfo()
+                {
+                    Comments = "Optional. Organization street address required by some HydrantId validators (e.g. IdenTrust) on domain validation requests.",
+                    Hidden = false,
+                    DefaultValue = "",
+                    Type = "String"
+                },
+                [ConfigConstants.HydrantIdOrgCityProvPostalCodeCountry] = new PropertyConfigInfo()
+                {
+                    Comments = "Optional. Organization city/province/postal code/country required by some HydrantId validators (e.g. IdenTrust) on domain validation requests.",
+                    Hidden = false,
+                    DefaultValue = "",
+                    Type = "String"
+                },
+                [ConfigConstants.HydrantIdEmailAddress] = new PropertyConfigInfo()
+                {
+                    Comments = "Optional. Organization contact email address required by some HydrantId validators (e.g. IdenTrust) on domain validation requests.",
+                    Hidden = false,
+                    DefaultValue = "",
+                    Type = "String"
+                },
+                [ConfigConstants.HydrantIdPhoneNumber] = new PropertyConfigInfo()
+                {
+                    Comments = "Optional. Organization contact phone number required by some HydrantId validators (e.g. IdenTrust) on domain validation requests.",
+                    Hidden = false,
+                    DefaultValue = "",
+                    Type = "String"
                 },
                 [ConfigConstants.Enabled] = new PropertyConfigInfo()
                 {
