@@ -13,6 +13,7 @@ using System.Threading.Tasks;
 using Keyfactor.AnyGateway.Extensions;
 using Keyfactor.Extensions.CAPlugin.HydrantId;
 using Keyfactor.HydrantId;
+using Keyfactor.HydrantId.Client;
 using Keyfactor.HydrantId.Client.Models;
 using Keyfactor.HydrantId.Client.Models.Enums;
 using Keyfactor.HydrantId.Interfaces;
@@ -193,16 +194,47 @@ namespace HydrantCAProxy.Tests
         }
 
         [Fact]
-        public async Task ValidateCAConnectionInfo_AllFieldsPresent_DelegatesToPing()
+        public async Task ValidateCAConnectionInfo_AllFieldsPresent_DelegatesToPingWithNonNullConfig()
         {
             var plugin = new HydrantIdCAPlugin();
             var mockClient = new Mock<IHydrantIdClient>();
             mockClient.Setup(c => c.Ping()).ReturnsAsync(true);
-            plugin.ClientFactory = _ => mockClient.Object;
+            IAnyCAPluginConfigProvider capturedConfig = null;
+            plugin.ClientFactory = config =>
+            {
+                capturedConfig = config;
+                return mockClient.Object;
+            };
 
             await plugin.ValidateCAConnectionInfo(ValidConnectionData());
 
             mockClient.Verify(c => c.Ping(), Times.Once);
+            // Regression: ValidateCAConnectionInfo runs before Initialize() is ever called by the
+            // Gateway, so Config must be populated from connectionInfo itself, not left null --
+            // otherwise ClientFactory(Config) builds a HydrantIdClient with a null config provider.
+            Assert.NotNull(capturedConfig);
+            Assert.NotNull(capturedConfig.CAConnectionData);
+        }
+
+        [Fact]
+        public async Task ValidateCAConnectionInfo_WithoutPriorInitialize_BuildsRealClientWithoutArgumentNullException()
+        {
+            // Reproduces the exact path the Gateway calls before Initialize() is ever invoked:
+            // ConfigurationController -> ValidateCAConnectionAsync -> ValidateCAConnectionInfo ->
+            // Ping -> ClientFactory(Config) -> new HydrantIdClient(Config). Constructs a real
+            // HydrantIdClient from whatever Config ends up being (this is where the original bug
+            // threw ArgumentNullException("config cannot be null")), then substitutes a mock for
+            // the actual Ping() call so no real network I/O happens.
+            var plugin = new HydrantIdCAPlugin();
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.Ping()).ReturnsAsync(true);
+            plugin.ClientFactory = config =>
+            {
+                _ = new HydrantIdClient(config);
+                return mockClient.Object;
+            };
+
+            await plugin.ValidateCAConnectionInfo(ValidConnectionData());
         }
 
         // ---------------------------------------------------------------------

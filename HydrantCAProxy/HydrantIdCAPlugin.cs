@@ -35,6 +35,14 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
         internal Func<IAnyCAPluginConfigProvider, IHydrantIdClient> ClientFactory { get; set; }
             = config => new HydrantIdClient(config);
 
+        // Minimal IAnyCAPluginConfigProvider over a raw connectionInfo dictionary, used by
+        // ValidateCAConnectionInfo -- that entry point runs before the Gateway ever calls
+        // Initialize(), so Config would otherwise be null when Ping() builds a client.
+        private sealed class ConnectionInfoProvider : IAnyCAPluginConfigProvider
+        {
+            public Dictionary<string, object> CAConnectionData { get; set; }
+        }
+
         public void Initialize(IAnyCAPluginConfigProvider configProvider, ICertificateDataReader certificateDataReader)
         {
             using var flow = new FlowLogger(_logger, "Initialize");
@@ -171,6 +179,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             var rawData = JsonConvert.SerializeObject(connectionInfo);
             _logger.LogTrace("ValidateCAConnectionInfo: connectionInfo JSON (sensitive keys masked): {Json}", MaskConfigForLog(rawData));
 
+            Config = new ConnectionInfoProvider { CAConnectionData = connectionInfo };
             _config = JsonConvert.DeserializeObject<HydrantIdCAPluginConfig.Config>(rawData);
 
             _logger.LogTrace("ValidateCAConnectionInfo: HydrantIdBaseUrl='{BaseUrl}', Enabled={Enabled}",
