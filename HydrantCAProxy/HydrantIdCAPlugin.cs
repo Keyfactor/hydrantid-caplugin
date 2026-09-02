@@ -903,6 +903,13 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
         ///                 reports VALIDATED or the configured budget runs out.
         ///   3. Cleanup -- remove every record this call staged, whatever the outcome.
         ///
+        /// Validation targets the registrable base domain rather than the CSR's fully-qualified
+        /// name, because HydrantID links the vetted organization to the base domain only --
+        /// validating a subdomain yields a record with a null organizationIds, and POST /csr then
+        /// rejects the enrollment with "No valid domains associated with organization". A
+        /// base-domain validation also covers every subdomain until domainValidUntil. If HydrantID
+        /// will not accept the base domain, the fully-qualified name is retried as a fallback.
+        ///
         /// Domains that could not be automated (no factory, no plugin for the zone, or no code
         /// returned) fall back to the manual path and appear in the returned pending message, so a
         /// CA with no DNS plugin deployed behaves exactly as it did before automation existed.
@@ -932,64 +939,62 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             {
                 foreach (var domainName in domainsToValidate)
                 {
-                    var match = existingDomains.FirstOrDefault(d =>
+                    var exactMatch = existingDomains.FirstOrDefault(d =>
                         string.Equals(d.DomainName, domainName, StringComparison.OrdinalIgnoreCase));
 
-                    if (match == null && IsCoveredByValidatedAncestor(domainName, existingDomains, out var coveringDomain))
-                    {
-                        flow.Step("DomainValidation.CoveredByValidatedParent", $"domain='{domainName}', parent='{coveringDomain}'");
-                        continue;
-                    }
-
-                    Domain domain;
-                    if (match == null || match.Status == DomainStatusEnum.Expired)
-                    {
-                        // HydrantID's "regenerate code" action for an expired domain is the same
-                        // POST used to start a validation from scratch -- confirmed idempotent per
-                        // domain name (does not create a duplicate record) against staging.
-                        flow.Step("DomainValidation.CreateOrRegenerate",
-                            $"domain='{domainName}', priorStatus={(match == null ? "(none)" : match.Status.ToString())}");
-                        var payload = _requestManager.GetCreateDomainValidationRequest(domainName, validatorId, _config?.HydrantIdAccountId, BuildOrgPayload());
-                        domain = await client.GetSubmitCreateDomainValidationAsync(payload);
-                    }
-                    else if (match.Status != DomainStatusEnum.Validated)
-                    {
-                        flow.Step("DomainValidation.Recheck", $"domain='{domainName}', status={match.Status}, domainId='{match.Id}'");
-                        domain = await client.GetSubmitCheckDomainValidationAsync(match.Id);
-                    }
-                    else
+                    if (exactMatch?.Status == DomainStatusEnum.Validated)
                     {
                         flow.Step("DomainValidation.AlreadyValidated", $"domain='{domainName}'");
                         continue;
                     }
 
-                    if (domain?.Status == DomainStatusEnum.Validated)
+                    if (exactMatch == null && IsCoveredByValidatedAncestor(domainName, existingDomains, out var coveringDomain))
                     {
-                        flow.Step("DomainValidation.NowValidated", $"domain='{domainName}'");
+                        flow.Step("DomainValidation.CoveredByValidatedParent", $"domain='{domainName}', parent='{coveringDomain}'");
                         continue;
                     }
 
-                    flow.Step("DomainValidation.StillPending", $"domain='{domainName}', status={domain?.Status.ToString() ?? "(null response)"}");
-                    var instructions = domain?.CodeInstructions ?? "(no instructions returned by HydrantId)";
+                    var (domain, target, targetError) =
+                        await ResolveDomainValidationRecordAsync(client, flow, domainName, existingDomains, validatorId);
 
-                    var dnsValidator = ResolveDnsValidator(flow, domainName);
+                    if (domain == null)
+                    {
+                        // Every candidate was rejected by HydrantID. Report the domain as pending
+                        // with the failure detail rather than throwing, so the rest of the
+                        // certificate's domains still make progress.
+                        pending.Add((domainName, targetError ?? "(no detail returned by HydrantId)"));
+                        continue;
+                    }
+
+                    if (domain.Status == DomainStatusEnum.Validated)
+                    {
+                        flow.Step("DomainValidation.NowValidated", $"domain='{target}'");
+                        continue;
+                    }
+
+                    flow.Step("DomainValidation.StillPending", $"domain='{target}', status={domain.Status?.ToString() ?? "(none)"}");
+                    var instructions = domain.CodeInstructions ?? "(no instructions returned by HydrantId)";
+
+                    // The DNS plugin is resolved on the name the TXT record actually goes on, so a
+                    // base domain in a different zone from the CSR's hostname routes correctly.
+                    var dnsValidator = ResolveDnsValidator(flow, target);
                     if (dnsValidator == null)
                     {
-                        pending.Add((domainName, instructions));
+                        pending.Add((target, instructions));
                         continue;
                     }
 
-                    if (string.IsNullOrWhiteSpace(domain?.Code) || string.IsNullOrWhiteSpace(domain?.Id))
+                    if (string.IsNullOrWhiteSpace(domain.Code) || string.IsNullOrWhiteSpace(domain.Id))
                     {
-                        flow.Skip($"DomainValidation.Stage:{domainName}", "HydrantId returned no validation code or domain id to publish");
-                        pending.Add((domainName, instructions));
+                        flow.Skip($"DomainValidation.Stage:{target}", "HydrantId returned no validation code or domain id to publish");
+                        pending.Add((target, instructions));
                         continue;
                     }
 
-                    if (await StageDnsRecordAsync(flow, dnsValidator, domainName, domain.Code))
-                        staged.Add(new StagedValidation(domainName, domain.Id, instructions, dnsValidator));
+                    if (await StageDnsRecordAsync(flow, dnsValidator, target, domain.Code))
+                        staged.Add(new StagedValidation(target, domain.Id, instructions, dnsValidator));
                     else
-                        pending.Add((domainName, instructions));
+                        pending.Add((target, instructions));
                 }
 
                 if (staged.Count > 0)
@@ -1018,6 +1023,162 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
 
             return (false, message);
         }
+
+        /// <summary>
+        /// Obtains the HydrantID domain record to validate for <paramref name="domainName"/>, trying
+        /// each candidate from <see cref="GetValidationTargets"/> in order: the registrable base
+        /// domain first, then the fully-qualified name. A candidate HydrantID rejects (for example a
+        /// bare public suffix that the naive base-domain derivation produced) falls through to the
+        /// next one instead of failing the enrollment.
+        /// </summary>
+        /// <returns>
+        /// The domain record and the name it belongs to, or (null, null, error) when every candidate
+        /// was rejected.
+        /// </returns>
+        internal async Task<(Domain Domain, string Target, string Error)> ResolveDomainValidationRecordAsync(
+            IHydrantIdClient client, FlowLogger flow, string domainName, List<Domain> existingDomains, string validatorId)
+        {
+            var targets = GetValidationTargets(domainName);
+            string lastError = null;
+
+            foreach (var target in targets)
+            {
+                var match = existingDomains.FirstOrDefault(d =>
+                    string.Equals(d.DomainName, target, StringComparison.OrdinalIgnoreCase));
+
+                if (match?.Status == DomainStatusEnum.Validated)
+                {
+                    flow.Step("DomainValidation.AlreadyValidated", $"domain='{target}' (covers '{domainName}')");
+                    return (match, target, null);
+                }
+
+                try
+                {
+                    Domain domain;
+                    if (match == null || match.Status == DomainStatusEnum.Expired)
+                    {
+                        // HydrantID's "regenerate code" action for an expired domain is the same
+                        // POST used to start a validation from scratch -- confirmed idempotent per
+                        // domain name (does not create a duplicate record) against staging.
+                        flow.Step("DomainValidation.CreateOrRegenerate",
+                            $"domain='{target}', for='{domainName}', priorStatus={(match == null ? "(none)" : match.Status.ToString())}");
+                        var payload = _requestManager.GetCreateDomainValidationRequest(target, validatorId, _config?.HydrantIdAccountId, BuildOrgPayload());
+                        domain = await client.GetSubmitCreateDomainValidationAsync(payload);
+                    }
+                    else
+                    {
+                        flow.Step("DomainValidation.Recheck", $"domain='{target}', status={match.Status}, domainId='{match.Id}'");
+                        domain = await client.GetSubmitCheckDomainValidationAsync(match.Id);
+                    }
+
+                    return (domain, target, null);
+                }
+                catch (Exception ex)
+                {
+                    lastError = $"HydrantId rejected domain validation for '{target}': {ex.Message}";
+                    flow.Fail($"DomainValidation.Target:{target}", ex.Message);
+                    _logger.LogWarning(ex, "ResolveDomainValidationRecordAsync: '{Target}' rejected for '{Domain}', trying next candidate: {Message}",
+                        target, domainName, ex.Message);
+                }
+            }
+
+            return (null, null, lastError);
+        }
+
+        /// <summary>
+        /// The names to attempt domain control validation on for <paramref name="domainName"/>, most
+        /// preferred first: the registrable base domain, then the fully-qualified name itself. The
+        /// two collapse to one entry when the name is already a base domain.
+        /// </summary>
+        internal static List<string> GetValidationTargets(string domainName)
+        {
+            var normalized = NormalizeDomainName(domainName);
+            if (string.IsNullOrEmpty(normalized))
+                return new List<string>();
+
+            var targets = new List<string>();
+            var baseDomain = GetBaseDomain(domainName);
+
+            if (!string.IsNullOrEmpty(baseDomain) &&
+                !string.Equals(baseDomain, normalized, StringComparison.OrdinalIgnoreCase))
+            {
+                targets.Add(baseDomain);
+            }
+
+            targets.Add(normalized);
+            return targets;
+        }
+
+        /// <summary>
+        /// The registrable base domain of <paramref name="domainName"/> -- the last two labels,
+        /// or three when the last two form a known multi-label public suffix. Any wildcard prefix
+        /// and trailing dot are stripped first.
+        ///
+        /// This is deliberately not a full public suffix list. Getting it wrong costs one rejected
+        /// API call, because <see cref="ResolveDomainValidationRecordAsync"/> falls back to the
+        /// fully-qualified name; carrying a PSL dependency and keeping its data current costs more.
+        /// </summary>
+        internal static string GetBaseDomain(string domainName)
+        {
+            var normalized = NormalizeDomainName(domainName);
+            if (string.IsNullOrEmpty(normalized))
+                return normalized;
+
+            var labels = normalized.Split('.');
+            if (labels.Length <= 2)
+                return normalized;
+
+            var lastTwo = string.Join(".", labels.Skip(labels.Length - 2));
+            if (!_multiLabelPublicSuffixes.Contains(lastTwo))
+                return lastTwo;
+
+            return labels.Length <= 3
+                ? normalized
+                : string.Join(".", labels.Skip(labels.Length - 3));
+        }
+
+        private static string NormalizeDomainName(string domainName)
+        {
+            if (string.IsNullOrWhiteSpace(domainName))
+                return null;
+
+            var normalized = domainName.Trim().TrimEnd('.');
+            if (normalized.StartsWith("*.", StringComparison.Ordinal))
+                normalized = normalized.Substring(2);
+
+            return normalized.Length == 0 ? null : normalized;
+        }
+
+        // Multi-label public suffixes common enough to be worth special-casing, so the base-domain
+        // derivation does not produce something unregistrable like "co.uk". Not exhaustive by
+        // design -- see GetBaseDomain. Add entries when a customer's TLD needs them.
+        private static readonly HashSet<string> _multiLabelPublicSuffixes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "co.uk", "org.uk", "ac.uk", "gov.uk", "me.uk", "net.uk", "sch.uk", "ltd.uk", "plc.uk",
+            "com.au", "net.au", "org.au", "edu.au", "gov.au", "asn.au", "id.au",
+            "co.nz", "net.nz", "org.nz", "govt.nz", "ac.nz",
+            "co.jp", "or.jp", "ne.jp", "ac.jp", "go.jp", "ad.jp", "ed.jp", "gr.jp", "lg.jp",
+            "co.kr", "or.kr", "ne.kr", "re.kr", "go.kr", "ac.kr",
+            "co.in", "net.in", "org.in", "gen.in", "firm.in", "ind.in", "gov.in", "ac.in",
+            "co.za", "org.za", "net.za", "web.za", "gov.za", "ac.za",
+            "co.il", "org.il", "net.il", "ac.il", "gov.il",
+            "com.br", "net.br", "org.br", "gov.br", "edu.br",
+            "com.mx", "org.mx", "net.mx", "gob.mx", "edu.mx",
+            "com.ar", "net.ar", "org.ar", "gob.ar", "edu.ar",
+            "com.co", "net.co", "org.co", "gov.co", "edu.co",
+            "com.cn", "net.cn", "org.cn", "gov.cn", "edu.cn", "ac.cn",
+            "com.tw", "net.tw", "org.tw", "gov.tw", "edu.tw",
+            "com.hk", "net.hk", "org.hk", "gov.hk", "edu.hk",
+            "com.sg", "net.sg", "org.sg", "gov.sg", "edu.sg",
+            "com.tr", "net.tr", "org.tr", "gov.tr", "edu.tr",
+            "com.pl", "net.pl", "org.pl", "gov.pl", "edu.pl",
+            "com.ua", "net.ua", "org.ua", "gov.ua", "edu.ua",
+            "com.ru", "net.ru", "org.ru", "edu.ru",
+            "com.es", "org.es", "nom.es", "gob.es", "edu.es",
+            "co.id", "or.id", "web.id", "go.id", "ac.id",
+            "co.th", "or.th", "in.th", "go.th", "ac.th",
+            "eu.com", "us.com", "uk.com", "uk.co", "gb.com",
+        };
 
         /// <summary>
         /// A HydrantID domain validation whose TXT record was written by this enrollment, and which

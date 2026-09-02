@@ -178,7 +178,9 @@ per domain without any configuration switch.
 plugin is deployed and configured for the zone that owns the domain, a single enrollment does all
 of the following without operator involvement:
 
-1. Creates (or re-checks) the HydrantId domain validation record to obtain its TXT code.
+1. Creates (or re-checks) the HydrantId domain validation record for the **registrable base
+   domain** of the requested name — see [Which name gets validated](#which-name-gets-validated)
+   — to obtain its TXT code.
 2. Asks the resolved DNS provider plugin to write that record. The record name is **the domain
    itself** — not an `_acme-challenge` subdomain, as in ACME — and the value is HydrantId's whole
    code string, e.g. `identrust_validate=1kiQrHax...`, matching the `codeInstructions` HydrantId
@@ -194,6 +196,33 @@ of the following without operator involvement:
 
 A cleanup failure is logged but never fails an enrollment that otherwise succeeded — a leftover
 TXT record cannot block issuance.
+
+#### Which name gets validated
+
+Domain control validation targets the **registrable base domain**, not the fully-qualified name
+from the CSR. Enrolling for `brian1.example.com` validates `example.com`.
+
+This is required, not merely an optimization. HydrantId links the vetted organization to the base
+domain only: a validation created for a subdomain comes back with `organizationIds: null`, and
+`POST /api/v2/csr` then rejects the enrollment with:
+
+```
+No valid domains associated with organization for IdenTrust policy: <policy name>!
+```
+
+Validating the base domain also covers every subdomain at any depth until `domainValidUntil`
+(roughly six months for IdenTrust), so subsequent enrollments for other hostnames in the same
+zone need no DNS write at all.
+
+The base domain is derived as the last two labels, or three when the last two form a known
+multi-label public suffix (`example.co.uk`, `example.com.au`, and similar). This is intentionally
+**not** a full public suffix list. If the derivation produces a name HydrantId will not accept,
+the plugin retries with the fully-qualified name, so an unrecognized suffix costs one rejected API
+call rather than a failed enrollment. A wildcard prefix (`*.example.com`) is stripped before
+deriving the base domain.
+
+If every candidate is rejected, that domain is reported in the external-validation message with
+HydrantId's error and the certificate's other domains still make progress.
 
 **Manual fallback.** Any domain that cannot be automated falls back to the previous behaviour:
 the enrollment returns an external-validation status carrying the TXT record to publish, and the
@@ -330,6 +359,10 @@ Confirm via the policy list that `details.validator` is unset for the policy und
 | C10 | DNS provider plugin misconfigured | Configure the DNS provider plugin with a bad credential, then enroll | Enrollment falls back to external validation with TXT instructions; Gateway log records the plugin's staging error; enrollment does not fail outright |
 | C11 | Mixed zones on one certificate | Enroll for a CN in an automated zone plus a SAN in a zone with no DNS plugin | The automated domain validates; the un-automated one is reported in the external-validation message for manual publication |
 | C12 | No DNS plugin deployed at all | With no DNS provider plugin configured, repeat C1/C2 | Behaves exactly as C1/C2 did before automation existed |
+| C13 | Base domain is what gets validated | Enroll for a subdomain (e.g. `host1.example.com`) never validated before | HydrantId's Domains list shows a record for `example.com`, not `host1.example.com`, and that record has a non-null `organizationIds` |
+| C14 | Second hostname in a validated zone | After C13, enroll for a different hostname in the same zone (e.g. `host2.example.com`) | Issues immediately with no DNS write and no new domain validation record — covered by the validated base domain |
+| C15 | Multi-label suffix domain | Enroll for a host under a `co.uk`-style domain if one is available | Validates `example.co.uk`, not `co.uk` |
+| C16 | Unrecognized multi-label suffix | Enroll for a host under a TLD whose two-label suffix is not in the built-in list | First create is rejected by HydrantId, plugin retries with the fully-qualified name, enrollment proceeds |
 
 ### D. Renewal
 

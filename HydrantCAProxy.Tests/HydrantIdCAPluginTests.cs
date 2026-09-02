@@ -453,7 +453,7 @@ namespace HydrantCAProxy.Tests
             mockClient.Setup(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()))
                 .ReturnsAsync(new Domain { Status = DomainStatusEnum.Validated });
 
-            var result = await plugin.EnsureDomainsValidatedAsync(mockClient.Object, NewFlow(), new List<string> { "new.example.com" }, "IdenTrust");
+            var result = await plugin.EnsureDomainsValidatedAsync(mockClient.Object, NewFlow(), new List<string> { "new-example.com" }, "IdenTrust");
 
             Assert.True(result.AllValidated);
             mockClient.Verify(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()), Times.Once);
@@ -466,12 +466,12 @@ namespace HydrantCAProxy.Tests
             var mockClient = new Mock<IHydrantIdClient>();
             mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>
             {
-                new Domain { Id = "d1", DomainName = "expired.example.com", Status = DomainStatusEnum.Expired }
+                new Domain { Id = "d1", DomainName = "expired-example.com", Status = DomainStatusEnum.Expired }
             });
             mockClient.Setup(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()))
                 .ReturnsAsync(new Domain { Status = DomainStatusEnum.Pending, CodeInstructions = "new code" });
 
-            var result = await plugin.EnsureDomainsValidatedAsync(mockClient.Object, NewFlow(), new List<string> { "expired.example.com" }, "IdenTrust");
+            var result = await plugin.EnsureDomainsValidatedAsync(mockClient.Object, NewFlow(), new List<string> { "expired-example.com" }, "IdenTrust");
 
             Assert.False(result.AllValidated);
             mockClient.Verify(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()), Times.Once);
@@ -485,12 +485,12 @@ namespace HydrantCAProxy.Tests
             var mockClient = new Mock<IHydrantIdClient>();
             mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>
             {
-                new Domain { Id = "d1", DomainName = "pending.example.com", Status = DomainStatusEnum.Pending }
+                new Domain { Id = "d1", DomainName = "pending-example.com", Status = DomainStatusEnum.Pending }
             });
             mockClient.Setup(c => c.GetSubmitCheckDomainValidationAsync("d1"))
                 .ReturnsAsync(new Domain { Status = DomainStatusEnum.Validated });
 
-            var result = await plugin.EnsureDomainsValidatedAsync(mockClient.Object, NewFlow(), new List<string> { "pending.example.com" }, "IdenTrust");
+            var result = await plugin.EnsureDomainsValidatedAsync(mockClient.Object, NewFlow(), new List<string> { "pending-example.com" }, "IdenTrust");
 
             Assert.True(result.AllValidated);
             mockClient.Verify(c => c.GetSubmitCheckDomainValidationAsync("d1"), Times.Once);
@@ -516,7 +516,7 @@ namespace HydrantCAProxy.Tests
         }
 
         [Fact]
-        public async Task EnsureDomainsValidatedAsync_SubdomainOfPendingParent_StillCreatesOwnRecord()
+        public async Task EnsureDomainsValidatedAsync_SubdomainOfPendingParent_RechecksTheParentInsteadOfCreatingItsOwn()
         {
             var plugin = new HydrantIdCAPlugin();
             var mockClient = new Mock<IHydrantIdClient>();
@@ -524,14 +524,18 @@ namespace HydrantCAProxy.Tests
             {
                 new Domain { Id = "d1", DomainName = "keyfactorhydrantid.com", Status = DomainStatusEnum.Pending }
             });
-            mockClient.Setup(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()))
-                .ReturnsAsync(new Domain { Status = DomainStatusEnum.Validated });
+            mockClient.Setup(c => c.GetSubmitCheckDomainValidationAsync("d1"))
+                .ReturnsAsync(new Domain { Id = "d1", Status = DomainStatusEnum.Validated });
 
             var result = await plugin.EnsureDomainsValidatedAsync(mockClient.Object, NewFlow(),
                 new List<string> { "www.keyfactorhydrantid.com" }, "IdenTrust");
 
+            // The base domain carries the organization link, so its in-flight validation is the
+            // one to finish -- creating a second record for the subdomain would produce another
+            // record with a null organizationIds.
             Assert.True(result.AllValidated);
-            mockClient.Verify(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()), Times.Once);
+            mockClient.Verify(c => c.GetSubmitCheckDomainValidationAsync("d1"), Times.Once);
+            mockClient.Verify(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()), Times.Never);
         }
 
         [Theory]
@@ -578,7 +582,7 @@ namespace HydrantCAProxy.Tests
                 new Domain
                 {
                     Id = "deleted-1",
-                    DomainName = "gone.example.com",
+                    DomainName = "gone-example.com",
                     Status = DomainStatusEnum.Pending,
                     DeletedAt = "2026-09-01T20:23:52.000Z"
                 }
@@ -587,7 +591,7 @@ namespace HydrantCAProxy.Tests
                 .ReturnsAsync(new Domain { Id = "fresh-1", Status = DomainStatusEnum.Validated });
 
             var result = await plugin.EnsureDomainsValidatedAsync(
-                mockClient.Object, NewFlow(), new List<string> { "gone.example.com" }, "IdenTrust");
+                mockClient.Object, NewFlow(), new List<string> { "gone-example.com" }, "IdenTrust");
 
             Assert.True(result.AllValidated);
             mockClient.Verify(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()), Times.Once);
@@ -604,7 +608,7 @@ namespace HydrantCAProxy.Tests
                 new Domain
                 {
                     Id = "deleted-1",
-                    DomainName = "gone.example.com",
+                    DomainName = "gone-example.com",
                     Status = DomainStatusEnum.Validated,
                     DeletedAt = "2026-09-01T20:23:52.000Z"
                 }
@@ -613,7 +617,7 @@ namespace HydrantCAProxy.Tests
                 .ReturnsAsync(new Domain { Id = "fresh-1", Status = DomainStatusEnum.Validated });
 
             var result = await plugin.EnsureDomainsValidatedAsync(
-                mockClient.Object, NewFlow(), new List<string> { "gone.example.com" }, "IdenTrust");
+                mockClient.Object, NewFlow(), new List<string> { "gone-example.com" }, "IdenTrust");
 
             Assert.True(result.AllValidated);
             mockClient.Verify(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()), Times.Once);
@@ -634,19 +638,19 @@ namespace HydrantCAProxy.Tests
             var mockClient = new Mock<IHydrantIdClient>();
             mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>
             {
-                new Domain { Id = "d1", DomainName = "already.example.com", Status = DomainStatusEnum.Validated },
-                new Domain { Id = "d2", DomainName = "pending.example.com", Status = DomainStatusEnum.Pending }
+                new Domain { Id = "d1", DomainName = "already-example.com", Status = DomainStatusEnum.Validated },
+                new Domain { Id = "d2", DomainName = "pending-example.com", Status = DomainStatusEnum.Pending }
             });
             mockClient.Setup(c => c.GetSubmitCheckDomainValidationAsync("d2"))
                 .ReturnsAsync(new Domain { Status = DomainStatusEnum.Pending, CodeInstructions = "still waiting" });
 
             var result = await plugin.EnsureDomainsValidatedAsync(mockClient.Object, NewFlow(),
-                new List<string> { "already.example.com", "pending.example.com" }, "IdenTrust");
+                new List<string> { "already-example.com", "pending-example.com" }, "IdenTrust");
 
             Assert.False(result.AllValidated);
-            Assert.Contains("pending.example.com", result.PendingMessage);
+            Assert.Contains("pending-example.com", result.PendingMessage);
             Assert.Contains("still waiting", result.PendingMessage);
-            Assert.DoesNotContain("already.example.com", result.PendingMessage);
+            Assert.DoesNotContain("already-example.com", result.PendingMessage);
         }
 
         // ---------------------------------------------------------------------
@@ -722,7 +726,7 @@ namespace HydrantCAProxy.Tests
                 .ReturnsAsync(new Domain { Status = DomainStatusEnum.Validated });
             plugin.ClientFactory = _ => mockClient.Object;
 
-            await plugin.EnsureDomainsValidatedAsync(mockClient.Object, NewFlow(), new List<string> { "new.example.com" }, "IdenTrust");
+            await plugin.EnsureDomainsValidatedAsync(mockClient.Object, NewFlow(), new List<string> { "new-example.com" }, "IdenTrust");
 
             Assert.NotNull(capturedPayload.Payload);
             Assert.IsType<DomainValidationOrgPayload>(capturedPayload.Payload);
@@ -779,6 +783,160 @@ namespace HydrantCAProxy.Tests
             factory.Setup(f => f.ResolveDomainValidator(It.IsAny<string>(), HydrantIdCAPlugin.DnsValidationType))
                 .Returns(validator);
             return factory;
+        }
+
+        // ---------------------------------------------------------------------
+        // Validation target selection (base domain, with FQDN fallback)
+        // ---------------------------------------------------------------------
+
+        [Theory]
+        [InlineData("keyfactorluadns.com", "keyfactorluadns.com")]
+        [InlineData("brian1.keyfactorluadns.com", "keyfactorluadns.com")]
+        [InlineData("a.b.c.keyfactorluadns.com", "keyfactorluadns.com")]
+        [InlineData("*.keyfactorluadns.com", "keyfactorluadns.com")]
+        [InlineData("brian1.keyfactorluadns.com.", "keyfactorluadns.com")]
+        [InlineData("  brian1.keyfactorluadns.com  ", "keyfactorluadns.com")]
+        [InlineData("WWW.Example.COM", "Example.COM")]
+        // Multi-label public suffixes must not collapse to something unregistrable.
+        [InlineData("example.co.uk", "example.co.uk")]
+        [InlineData("www.example.co.uk", "example.co.uk")]
+        [InlineData("a.b.example.co.uk", "example.co.uk")]
+        [InlineData("co.uk", "co.uk")]
+        [InlineData("example.com.au", "example.com.au")]
+        [InlineData("host.example.com.au", "example.com.au")]
+        // Single-label and empty inputs pass through rather than throwing.
+        [InlineData("localhost", "localhost")]
+        [InlineData("", null)]
+        [InlineData(null, null)]
+        public void GetBaseDomain_ReturnsRegistrableBase(string input, string expected)
+        {
+            Assert.Equal(expected, HydrantIdCAPlugin.GetBaseDomain(input));
+        }
+
+        [Fact]
+        public void GetValidationTargets_Subdomain_PrefersBaseDomainThenFqdn()
+        {
+            var targets = HydrantIdCAPlugin.GetValidationTargets("brian1.keyfactorluadns.com");
+
+            Assert.Equal(new[] { "keyfactorluadns.com", "brian1.keyfactorluadns.com" }, targets);
+        }
+
+        [Fact]
+        public void GetValidationTargets_AlreadyBaseDomain_ReturnsSingleTarget()
+        {
+            var targets = HydrantIdCAPlugin.GetValidationTargets("keyfactorluadns.com");
+
+            Assert.Equal(new[] { "keyfactorluadns.com" }, targets);
+        }
+
+        [Fact]
+        public void GetValidationTargets_EmptyInput_ReturnsNoTargets()
+        {
+            Assert.Empty(HydrantIdCAPlugin.GetValidationTargets(null));
+            Assert.Empty(HydrantIdCAPlugin.GetValidationTargets("   "));
+        }
+
+        [Fact]
+        public async Task EnsureDomainsValidatedAsync_Subdomain_ValidatesTheBaseDomain()
+        {
+            var plugin = new HydrantIdCAPlugin();
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>());
+            CreateDomainValidationPayload captured = null;
+            mockClient.Setup(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()))
+                .Callback<CreateDomainValidationPayload>(pl => captured = pl)
+                .ReturnsAsync(new Domain { Id = "d1", Status = DomainStatusEnum.Validated });
+
+            var result = await plugin.EnsureDomainsValidatedAsync(mockClient.Object, NewFlow(),
+                new List<string> { "brian1.keyfactorluadns.com" }, "IdenTrust");
+
+            // HydrantId links the vetted organization to the base domain only.
+            Assert.True(result.AllValidated);
+            Assert.Equal("keyfactorluadns.com", captured.DomainName);
+            mockClient.Verify(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task EnsureDomainsValidatedAsync_BaseDomainRejected_FallsBackToTheFqdn()
+        {
+            var plugin = new HydrantIdCAPlugin();
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>());
+            var attempted = new List<string>();
+            mockClient.Setup(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()))
+                .Callback<CreateDomainValidationPayload>(pl => attempted.Add(pl.DomainName))
+                .Returns((CreateDomainValidationPayload pl) => pl.DomainName == "example.invalid"
+                    ? throw new InvalidOperationException("HTTP 400: domain not registrable")
+                    : Task.FromResult(new Domain { Id = "d1", Status = DomainStatusEnum.Validated }));
+
+            var result = await plugin.EnsureDomainsValidatedAsync(mockClient.Object, NewFlow(),
+                new List<string> { "host.example.invalid" }, "IdenTrust");
+
+            Assert.True(result.AllValidated);
+            Assert.Equal(new[] { "example.invalid", "host.example.invalid" }, attempted);
+        }
+
+        [Fact]
+        public async Task EnsureDomainsValidatedAsync_AllTargetsRejected_ReportsPendingWithTheError()
+        {
+            var plugin = new HydrantIdCAPlugin();
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>());
+            mockClient.Setup(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()))
+                .ThrowsAsync(new InvalidOperationException("HTTP 400: domain not permitted"));
+
+            var result = await plugin.EnsureDomainsValidatedAsync(mockClient.Object, NewFlow(),
+                new List<string> { "host.example.invalid" }, "IdenTrust");
+
+            Assert.False(result.AllValidated);
+            Assert.Contains("domain not permitted", result.PendingMessage);
+            // Both candidates attempted before giving up, and the failure is reported rather than thrown.
+            mockClient.Verify(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()), Times.Exactly(2));
+        }
+
+        [Fact]
+        public async Task EnsureDomainsValidatedAsync_OneDomainRejected_OtherDomainsStillProgress()
+        {
+            var plugin = new HydrantIdCAPlugin();
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>());
+            mockClient.Setup(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()))
+                .Returns((CreateDomainValidationPayload pl) => pl.DomainName.EndsWith(".invalid")
+                    ? throw new InvalidOperationException("HTTP 400: domain not permitted")
+                    : Task.FromResult(new Domain { Id = "d1", Status = DomainStatusEnum.Validated }));
+
+            var result = await plugin.EnsureDomainsValidatedAsync(mockClient.Object, NewFlow(),
+                new List<string> { "good-example.com", "host.example.invalid" }, "IdenTrust");
+
+            Assert.False(result.AllValidated);
+            Assert.Contains("host.example.invalid", result.PendingMessage);
+            Assert.DoesNotContain("good-example.com", result.PendingMessage);
+        }
+
+        [Fact]
+        public async Task EnsureDomainsValidatedAsync_SubdomainStaging_WritesTxtOnTheBaseDomain()
+        {
+            var validator = StubDnsValidator();
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>());
+            mockClient.Setup(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()))
+                .ReturnsAsync(new Domain
+                {
+                    Id = "d1",
+                    Status = DomainStatusEnum.Pending,
+                    Code = "identrust_validate=abc123",
+                    CodeInstructions = "publish TXT"
+                });
+            mockClient.Setup(c => c.GetSubmitCheckDomainValidationAsync("d1"))
+                .ReturnsAsync(new Domain { Id = "d1", Status = DomainStatusEnum.Validated });
+            var plugin = MakePluginWithDnsFactory(mockClient, StubDnsFactory(validator.Object).Object);
+
+            var result = await plugin.EnsureDomainsValidatedAsync(mockClient.Object, NewFlow(),
+                new List<string> { "brian1.keyfactorluadns.com" }, "IdenTrust");
+
+            Assert.True(result.AllValidated);
+            validator.Verify(v => v.StageValidation("keyfactorluadns.com", "identrust_validate=abc123", It.IsAny<CancellationToken>()), Times.Once);
+            validator.Verify(v => v.CleanupValidation("keyfactorluadns.com", It.IsAny<CancellationToken>()), Times.Once);
         }
 
         [Fact]
@@ -846,13 +1004,13 @@ namespace HydrantCAProxy.Tests
             var plugin = MakePluginWithDnsFactory(mockClient, StubDnsFactory(validator.Object).Object);
 
             var result = await plugin.EnsureDomainsValidatedAsync(
-                mockClient.Object, NewFlow(), new List<string> { "auto.example.com" }, "IdenTrust");
+                mockClient.Object, NewFlow(), new List<string> { "auto-example.com" }, "IdenTrust");
 
             Assert.True(result.AllValidated);
             Assert.Null(result.PendingMessage);
             // Record name is the domain itself, value is HydrantID's whole code string.
-            validator.Verify(v => v.StageValidation("auto.example.com", "identrust_validate=abc123", It.IsAny<CancellationToken>()), Times.Once);
-            validator.Verify(v => v.CleanupValidation("auto.example.com", It.IsAny<CancellationToken>()), Times.Once);
+            validator.Verify(v => v.StageValidation("auto-example.com", "identrust_validate=abc123", It.IsAny<CancellationToken>()), Times.Once);
+            validator.Verify(v => v.CleanupValidation("auto-example.com", It.IsAny<CancellationToken>()), Times.Once);
         }
 
         [Fact]
@@ -872,7 +1030,7 @@ namespace HydrantCAProxy.Tests
             var plugin = MakePluginWithDnsFactory(mockClient, StubDnsFactory(validator.Object).Object);
 
             var result = await plugin.EnsureDomainsValidatedAsync(
-                mockClient.Object, NewFlow(), new List<string> { "auto.example.com" }, "IdenTrust");
+                mockClient.Object, NewFlow(), new List<string> { "auto-example.com" }, "IdenTrust");
 
             Assert.False(result.AllValidated);
             Assert.Contains("publish TXT", result.PendingMessage);
@@ -899,11 +1057,11 @@ namespace HydrantCAProxy.Tests
             var plugin = MakePluginWithDnsFactory(mockClient, StubDnsFactory(validator.Object).Object);
 
             var result = await plugin.EnsureDomainsValidatedAsync(
-                mockClient.Object, NewFlow(), new List<string> { "slow.example.com" }, "IdenTrust");
+                mockClient.Object, NewFlow(), new List<string> { "slow-example.com" }, "IdenTrust");
 
             Assert.False(result.AllValidated);
             Assert.Contains("publish TXT", result.PendingMessage);
-            validator.Verify(v => v.CleanupValidation("slow.example.com", It.IsAny<CancellationToken>()), Times.Once);
+            validator.Verify(v => v.CleanupValidation("slow-example.com", It.IsAny<CancellationToken>()), Times.Once);
         }
 
         [Fact]
@@ -925,10 +1083,10 @@ namespace HydrantCAProxy.Tests
             var plugin = MakePluginWithDnsFactory(mockClient, StubDnsFactory(validator.Object).Object);
 
             var result = await plugin.EnsureDomainsValidatedAsync(
-                mockClient.Object, NewFlow(), new List<string> { "flaky.example.com" }, "IdenTrust");
+                mockClient.Object, NewFlow(), new List<string> { "flaky-example.com" }, "IdenTrust");
 
             Assert.False(result.AllValidated);
-            validator.Verify(v => v.CleanupValidation("flaky.example.com", It.IsAny<CancellationToken>()), Times.Once);
+            validator.Verify(v => v.CleanupValidation("flaky-example.com", It.IsAny<CancellationToken>()), Times.Once);
         }
 
         [Fact]
@@ -952,7 +1110,7 @@ namespace HydrantCAProxy.Tests
             var plugin = MakePluginWithDnsFactory(mockClient, StubDnsFactory(validator.Object).Object);
 
             var result = await plugin.EnsureDomainsValidatedAsync(
-                mockClient.Object, NewFlow(), new List<string> { "auto.example.com" }, "IdenTrust");
+                mockClient.Object, NewFlow(), new List<string> { "auto-example.com" }, "IdenTrust");
 
             Assert.True(result.AllValidated);
         }
@@ -968,7 +1126,7 @@ namespace HydrantCAProxy.Tests
             var plugin = MakePluginWithDnsFactory(mockClient, StubDnsFactory(validator.Object).Object);
 
             var result = await plugin.EnsureDomainsValidatedAsync(
-                mockClient.Object, NewFlow(), new List<string> { "nocode.example.com" }, "IdenTrust");
+                mockClient.Object, NewFlow(), new List<string> { "nocode-example.com" }, "IdenTrust");
 
             Assert.False(result.AllValidated);
             Assert.Contains("publish TXT", result.PendingMessage);
@@ -982,12 +1140,12 @@ namespace HydrantCAProxy.Tests
             var mockClient = new Mock<IHydrantIdClient>();
             mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>
             {
-                new Domain { Id = "d1", DomainName = "done.example.com", Status = DomainStatusEnum.Validated }
+                new Domain { Id = "d1", DomainName = "done-example.com", Status = DomainStatusEnum.Validated }
             });
             var plugin = MakePluginWithDnsFactory(mockClient, factory.Object);
 
             var result = await plugin.EnsureDomainsValidatedAsync(
-                mockClient.Object, NewFlow(), new List<string> { "done.example.com" }, "IdenTrust");
+                mockClient.Object, NewFlow(), new List<string> { "done-example.com" }, "IdenTrust");
 
             Assert.True(result.AllValidated);
             factory.Verify(f => f.ResolveDomainValidator(It.IsAny<string>(), It.IsAny<string>()), Times.Never);

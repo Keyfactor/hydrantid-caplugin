@@ -1,5 +1,7 @@
 # v1.1.0
 * Added automated DNS-01 style domain control validation: when the AnyCA Gateway supplies an IDomainValidatorFactory and a DNS provider plugin is configured for the domain's zone, the plugin now stages HydrantId's validation TXT record, polls until the domain is VALIDATED, removes the record, and issues the certificate within a single enrollment call
+* Changed domain control validation to target the registrable base domain rather than the CSR's fully-qualified name; HydrantId links the vetted organization to the base domain only, and validating a subdomain produced a record with a null organizationIds that POST /csr rejected with "No valid domains associated with organization". A base-domain validation additionally covers every subdomain until domainValidUntil
+* Added a fallback to the fully-qualified name when HydrantId will not accept the derived base domain, so an unrecognized multi-label public suffix costs one rejected API call rather than a failed enrollment
 * Added per-domain fallback to external validation when automation is unavailable (no factory, no DNS plugin for the zone, staging failure, no validation code, or validation timeout), preserving the previous manual publish-and-resubmit behaviour
 * Added DnsPropagationDelaySeconds, DomainValidationTimeoutSeconds and DomainValidationPollIntervalSeconds CA connection settings
 * Added domain control validation for policies that declare a validator, including reuse of an already-validated parent domain for subdomains and regeneration of expired validation codes
