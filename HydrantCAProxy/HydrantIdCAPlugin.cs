@@ -37,12 +37,13 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
 
         private readonly IDomainValidatorFactory _validatorFactory;
 
-        // The validation type DNS provider plugins register themselves under. The ACME CA plugin
-        // resolves with "dns-01" at runtime, while that repo's DNS plugin documentation describes
-        // GetValidationType() as returning "DNS" -- so try the canonical value first and fall back
-        // to the legacy spelling rather than silently missing a plugin that is actually deployed.
-        internal const string DnsValidationType = "dns-01";
-        internal const string DnsValidationTypeLegacy = "DNS";
+        // The validation type DNS provider plugins register themselves under. The Gateway stores
+        // whatever the plugin's GetValidationType() returns in DomainValidatorTypes.ValidationType
+        // and matches on it exactly, so the spelling has to agree. "DNS" is what the deployed
+        // LuaDNS plugin reports (confirmed against AnyCA Gateway 26.2); the ACME CA plugin resolves
+        // with "dns-01". Both are attempted, "DNS" first, so either style of plugin is found.
+        internal const string DnsValidationType = "DNS";
+        internal const string DnsValidationTypeAlternate = "dns-01";
 
         internal const int DefaultDnsPropagationDelaySeconds = 30;
         internal const int DefaultDomainValidationTimeoutSeconds = 300;
@@ -975,9 +976,10 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                     flow.Step("DomainValidation.StillPending", $"domain='{target}', status={domain.Status?.ToString() ?? "(none)"}");
                     var instructions = domain.CodeInstructions ?? "(no instructions returned by HydrantId)";
 
-                    // The DNS plugin is resolved on the name the TXT record actually goes on, so a
-                    // base domain in a different zone from the CSR's hostname routes correctly.
-                    var dnsValidator = ResolveDnsValidator(flow, target);
+                    // Look the plugin up by the record's own name first, then by the name the CSR
+                    // asked for -- the Gateway's domain validation configuration may be registered
+                    // against either. See ResolveDnsValidator.
+                    var dnsValidator = ResolveDnsValidator(flow, target, domainName);
                     if (dnsValidator == null)
                     {
                         pending.Add((target, instructions));
@@ -1201,40 +1203,60 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
         }
 
         /// <summary>
-        /// Resolves the DNS provider plugin that owns <paramref name="domainName"/>'s zone, or null
-        /// when automation is unavailable for it. Never throws: any failure here degrades to the
-        /// manual validation path, which is strictly better than failing an enrollment because
-        /// plugin resolution misbehaved.
+        /// Resolves the DNS provider plugin to write the validation record with, trying each of
+        /// <paramref name="lookupNames"/> in order and returning the first match.
+        ///
+        /// The name used to *find* the plugin is deliberately separate from the name the TXT record
+        /// goes on, the same split the ACME CA plugin makes. The Gateway matches a domain validation
+        /// configuration on an exact string equality against the domains registered for it
+        /// (Domains.Domain = @DomainName), so a configuration registered against the requested
+        /// hostname will not match that hostname's base domain, and vice versa. Passing both means
+        /// either registration style resolves. Whichever plugin is found then writes the record on
+        /// the base domain, which its own zone discovery handles.
+        ///
+        /// Never throws: any failure here degrades to the manual validation path, which is strictly
+        /// better than failing an enrollment because plugin resolution misbehaved.
         /// </summary>
-        internal IDomainValidator ResolveDnsValidator(FlowLogger flow, string domainName)
+        internal IDomainValidator ResolveDnsValidator(FlowLogger flow, params string[] lookupNames)
         {
+            var candidates = (lookupNames ?? new string[0])
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var label = candidates.Count > 0 ? candidates[0] : "(none)";
+
             if (_validatorFactory == null)
             {
-                flow.Skip($"DomainValidation.ResolveValidator:{domainName}",
+                flow.Skip($"DomainValidation.ResolveValidator:{label}",
                     "no IDomainValidatorFactory supplied by the Gateway; manual DNS validation only");
                 return null;
             }
 
             try
             {
-                var validator = _validatorFactory.ResolveDomainValidator(domainName, DnsValidationType)
-                                ?? _validatorFactory.ResolveDomainValidator(domainName, DnsValidationTypeLegacy);
-
-                if (validator == null)
+                foreach (var candidate in candidates)
                 {
-                    flow.Skip($"DomainValidation.ResolveValidator:{domainName}",
-                        "no DNS provider plugin is configured for this zone");
-                    return null;
+                    var validator = _validatorFactory.ResolveDomainValidator(candidate, DnsValidationType)
+                                    ?? _validatorFactory.ResolveDomainValidator(candidate, DnsValidationTypeAlternate);
+
+                    if (validator == null)
+                        continue;
+
+                    flow.Step($"DomainValidation.ResolveValidator:{label}",
+                        $"{validator.GetType().Name} (matched on '{candidate}')");
+                    return validator;
                 }
 
-                flow.Step($"DomainValidation.ResolveValidator:{domainName}", validator.GetType().Name);
-                return validator;
+                flow.Skip($"DomainValidation.ResolveValidator:{label}",
+                    $"no DNS provider plugin is configured for {string.Join(" or ", candidates)}");
+                return null;
             }
             catch (Exception ex)
             {
-                flow.Fail($"DomainValidation.ResolveValidator:{domainName}", ex.Message);
+                flow.Fail($"DomainValidation.ResolveValidator:{label}", ex.Message);
                 _logger.LogWarning(ex, "ResolveDnsValidator: could not resolve a DNS provider plugin for '{Domain}', falling back to manual validation: {Message}",
-                    domainName, ex.Message);
+                    label, ex.Message);
                 return null;
             }
         }

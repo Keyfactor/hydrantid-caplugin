@@ -785,6 +785,18 @@ namespace HydrantCAProxy.Tests
             return factory;
         }
 
+        // A factory that only answers for one exact domain, mirroring the Gateway's
+        // Domains.Domain = @DomainName equality match.
+        private static Mock<IDomainValidatorFactory> StubDnsFactoryForDomain(IDomainValidator validator, string domain)
+        {
+            var factory = new Mock<IDomainValidatorFactory>();
+            factory.Setup(f => f.ResolveDomainValidator(It.IsAny<string>(), It.IsAny<string>()))
+                .Returns((IDomainValidator)null);
+            factory.Setup(f => f.ResolveDomainValidator(domain, HydrantIdCAPlugin.DnsValidationType))
+                .Returns(validator);
+            return factory;
+        }
+
         // ---------------------------------------------------------------------
         // Validation target selection (base domain, with FQDN fallback)
         // ---------------------------------------------------------------------
@@ -957,17 +969,17 @@ namespace HydrantCAProxy.Tests
 
             Assert.Null(plugin.ResolveDnsValidator(NewFlow(), "example.com"));
             factory.Verify(f => f.ResolveDomainValidator("example.com", HydrantIdCAPlugin.DnsValidationType), Times.Once);
-            factory.Verify(f => f.ResolveDomainValidator("example.com", HydrantIdCAPlugin.DnsValidationTypeLegacy), Times.Once);
+            factory.Verify(f => f.ResolveDomainValidator("example.com", HydrantIdCAPlugin.DnsValidationTypeAlternate), Times.Once);
         }
 
         [Fact]
-        public void ResolveDnsValidator_LegacyValidationType_IsUsedWhenCanonicalMisses()
+        public void ResolveDnsValidator_AlternateValidationType_IsUsedWhenPrimaryMisses()
         {
             var validator = StubDnsValidator().Object;
             var factory = new Mock<IDomainValidatorFactory>();
             factory.Setup(f => f.ResolveDomainValidator("example.com", HydrantIdCAPlugin.DnsValidationType))
                 .Returns((IDomainValidator)null);
-            factory.Setup(f => f.ResolveDomainValidator("example.com", HydrantIdCAPlugin.DnsValidationTypeLegacy))
+            factory.Setup(f => f.ResolveDomainValidator("example.com", HydrantIdCAPlugin.DnsValidationTypeAlternate))
                 .Returns(validator);
             var plugin = MakePluginWithDnsFactory(null, factory.Object);
 
@@ -983,6 +995,84 @@ namespace HydrantCAProxy.Tests
             var plugin = MakePluginWithDnsFactory(null, factory.Object);
 
             Assert.Null(plugin.ResolveDnsValidator(NewFlow(), "example.com"));
+        }
+
+        [Fact]
+        public void ResolveDnsValidator_TriesEachLookupNameInOrder()
+        {
+            var validator = StubDnsValidator().Object;
+            var factory = StubDnsFactoryForDomain(validator, "host.example.com");
+            var plugin = MakePluginWithDnsFactory(null, factory.Object);
+
+            // Base domain first, then the requested name -- only the latter is registered.
+            var resolved = plugin.ResolveDnsValidator(NewFlow(), "example.com", "host.example.com");
+
+            Assert.Same(validator, resolved);
+            factory.Verify(f => f.ResolveDomainValidator("example.com", HydrantIdCAPlugin.DnsValidationType), Times.Once);
+            factory.Verify(f => f.ResolveDomainValidator("host.example.com", HydrantIdCAPlugin.DnsValidationType), Times.Once);
+        }
+
+        [Fact]
+        public void ResolveDnsValidator_FirstLookupNameWins_DoesNotQueryTheRest()
+        {
+            var validator = StubDnsValidator().Object;
+            var factory = StubDnsFactoryForDomain(validator, "example.com");
+            var plugin = MakePluginWithDnsFactory(null, factory.Object);
+
+            Assert.Same(validator, plugin.ResolveDnsValidator(NewFlow(), "example.com", "host.example.com"));
+            factory.Verify(f => f.ResolveDomainValidator("host.example.com", It.IsAny<string>()), Times.Never);
+        }
+
+        [Fact]
+        public void ResolveDnsValidator_DuplicateAndBlankLookupNames_AreCollapsed()
+        {
+            var factory = new Mock<IDomainValidatorFactory>();
+            factory.Setup(f => f.ResolveDomainValidator(It.IsAny<string>(), It.IsAny<string>()))
+                .Returns((IDomainValidator)null);
+            var plugin = MakePluginWithDnsFactory(null, factory.Object);
+
+            Assert.Null(plugin.ResolveDnsValidator(NewFlow(), "example.com", "example.com", null, "  "));
+
+            factory.Verify(f => f.ResolveDomainValidator("example.com", HydrantIdCAPlugin.DnsValidationType), Times.Once);
+        }
+
+        [Fact]
+        public void ResolveDnsValidator_NoLookupNames_ReturnsNull()
+        {
+            var plugin = MakePluginWithDnsFactory(null, Mock.Of<IDomainValidatorFactory>());
+
+            Assert.Null(plugin.ResolveDnsValidator(NewFlow()));
+        }
+
+        [Fact]
+        public async Task EnsureDomainsValidatedAsync_PluginRegisteredOnRequestedNameOnly_StillStagesOnTheBaseDomain()
+        {
+            // Regression: base-domain targeting must not break a Gateway domain validation
+            // configuration that is registered against the requested hostname rather than the
+            // zone apex. The plugin is found via the hostname; the record still goes on the apex,
+            // which the DNS plugin's own zone discovery resolves.
+            var validator = StubDnsValidator();
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>());
+            mockClient.Setup(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()))
+                .ReturnsAsync(new Domain
+                {
+                    Id = "d1",
+                    Status = DomainStatusEnum.Pending,
+                    Code = "identrust_validate=abc123",
+                    CodeInstructions = "publish TXT"
+                });
+            mockClient.Setup(c => c.GetSubmitCheckDomainValidationAsync("d1"))
+                .ReturnsAsync(new Domain { Id = "d1", Status = DomainStatusEnum.Validated });
+            var factory = StubDnsFactoryForDomain(validator.Object, "www.keyfactorluadns.com");
+            var plugin = MakePluginWithDnsFactory(mockClient, factory.Object);
+
+            var result = await plugin.EnsureDomainsValidatedAsync(mockClient.Object, NewFlow(),
+                new List<string> { "www.keyfactorluadns.com" }, "IdenTrust");
+
+            Assert.True(result.AllValidated);
+            validator.Verify(v => v.StageValidation("keyfactorluadns.com", "identrust_validate=abc123", It.IsAny<CancellationToken>()), Times.Once);
+            validator.Verify(v => v.CleanupValidation("keyfactorluadns.com", It.IsAny<CancellationToken>()), Times.Once);
         }
 
         [Fact]
