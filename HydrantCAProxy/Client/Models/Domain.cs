@@ -60,5 +60,10 @@ namespace Keyfactor.HydrantId.Client.Models
         [JsonProperty("updatedAt", NullValueHandling = NullValueHandling.Ignore)]
         public string UpdatedAt { get;set; }
 
+        // Non-null once HydrantID has soft-deleted the record. Such a record must never be
+        // matched or reused -- see the filtering in HydrantIdCAPlugin.EnsureDomainsValidatedAsync.
+        [JsonProperty("deletedAt", NullValueHandling = NullValueHandling.Ignore)]
+        public string DeletedAt { get;set; }
+
     }
 }

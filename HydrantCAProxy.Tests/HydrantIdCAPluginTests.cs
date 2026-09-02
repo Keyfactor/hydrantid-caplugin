@@ -550,6 +550,76 @@ namespace HydrantCAProxy.Tests
         }
 
         [Fact]
+        public void IsCoveredByValidatedAncestor_SoftDeletedParent_ReturnsFalse()
+        {
+            var domains = new List<Domain>
+            {
+                new Domain
+                {
+                    DomainName = "example.com",
+                    Status = DomainStatusEnum.Validated,
+                    DeletedAt = "2026-09-01T20:23:52.000Z"
+                }
+            };
+
+            Assert.False(HydrantIdCAPlugin.IsCoveredByValidatedAncestor("www.example.com", domains, out var covering));
+            Assert.Null(covering);
+        }
+
+        [Fact]
+        public async Task EnsureDomainsValidatedAsync_SoftDeletedPendingRecord_IsIgnoredAndValidationRestarted()
+        {
+            var plugin = new HydrantIdCAPlugin();
+            var mockClient = new Mock<IHydrantIdClient>();
+            // A soft-deleted record must not be re-checked: GET /domains/{id}/validate on a deleted
+            // id returns HTTP 500 from HydrantId, which would fail the enrollment outright.
+            mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>
+            {
+                new Domain
+                {
+                    Id = "deleted-1",
+                    DomainName = "gone.example.com",
+                    Status = DomainStatusEnum.Pending,
+                    DeletedAt = "2026-09-01T20:23:52.000Z"
+                }
+            });
+            mockClient.Setup(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()))
+                .ReturnsAsync(new Domain { Id = "fresh-1", Status = DomainStatusEnum.Validated });
+
+            var result = await plugin.EnsureDomainsValidatedAsync(
+                mockClient.Object, NewFlow(), new List<string> { "gone.example.com" }, "IdenTrust");
+
+            Assert.True(result.AllValidated);
+            mockClient.Verify(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()), Times.Once);
+            mockClient.Verify(c => c.GetSubmitCheckDomainValidationAsync(It.IsAny<string>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task EnsureDomainsValidatedAsync_SoftDeletedValidatedRecord_DoesNotCountAsValidated()
+        {
+            var plugin = new HydrantIdCAPlugin();
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>
+            {
+                new Domain
+                {
+                    Id = "deleted-1",
+                    DomainName = "gone.example.com",
+                    Status = DomainStatusEnum.Validated,
+                    DeletedAt = "2026-09-01T20:23:52.000Z"
+                }
+            });
+            mockClient.Setup(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()))
+                .ReturnsAsync(new Domain { Id = "fresh-1", Status = DomainStatusEnum.Validated });
+
+            var result = await plugin.EnsureDomainsValidatedAsync(
+                mockClient.Object, NewFlow(), new List<string> { "gone.example.com" }, "IdenTrust");
+
+            Assert.True(result.AllValidated);
+            mockClient.Verify(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()), Times.Once);
+        }
+
+        [Fact]
         public void IsCoveredByValidatedAncestor_ParentNotValidated_ReturnsFalse()
         {
             var existingDomains = new List<Domain> { new Domain { DomainName = "example.com", Status = DomainStatusEnum.Pending } };
@@ -657,6 +727,342 @@ namespace HydrantCAProxy.Tests
             Assert.NotNull(capturedPayload.Payload);
             Assert.IsType<DomainValidationOrgPayload>(capturedPayload.Payload);
             Assert.Equal("Acme Corp", ((DomainValidationOrgPayload)capturedPayload.Payload).OrgName);
+        }
+
+        // ---------------------------------------------------------------------
+        // DNS provider plugin automation (IDomainValidatorFactory)
+        // ---------------------------------------------------------------------
+
+        // Timings that keep these tests instant: no propagation wait, and a budget that allows
+        // exactly one status check before timing out.
+        private static Dictionary<string, object> FastDnsConnectionData()
+        {
+            var data = ValidConnectionData();
+            data[HydrantIdCAPluginConfig.ConfigConstants.DnsPropagationDelaySeconds] = 0;
+            data[HydrantIdCAPluginConfig.ConfigConstants.DomainValidationPollIntervalSeconds] = 1;
+            data[HydrantIdCAPluginConfig.ConfigConstants.DomainValidationTimeoutSeconds] = 1;
+            return data;
+        }
+
+        private static HydrantIdCAPlugin MakePluginWithDnsFactory(
+            Mock<IHydrantIdClient> client, IDomainValidatorFactory factory, Dictionary<string, object> data = null)
+        {
+            var plugin = new HydrantIdCAPlugin(factory);
+            plugin.Initialize(new FakeConfigProvider { CAConnectionData = data ?? FastDnsConnectionData() },
+                Mock.Of<ICertificateDataReader>());
+            if (client != null)
+                plugin.ClientFactory = _ => client.Object;
+            return plugin;
+        }
+
+        private static Mock<IDomainValidator> StubDnsValidator(bool stageSucceeds = true, bool cleanupSucceeds = true)
+        {
+            var validator = new Mock<IDomainValidator>();
+            validator.Setup(v => v.StageValidation(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DomainValidationResult
+                {
+                    Success = stageSucceeds,
+                    ErrorMessage = stageSucceeds ? null : "zone not found"
+                });
+            validator.Setup(v => v.CleanupValidation(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new DomainValidationResult
+                {
+                    Success = cleanupSucceeds,
+                    ErrorMessage = cleanupSucceeds ? null : "delete failed"
+                });
+            return validator;
+        }
+
+        private static Mock<IDomainValidatorFactory> StubDnsFactory(IDomainValidator validator)
+        {
+            var factory = new Mock<IDomainValidatorFactory>();
+            factory.Setup(f => f.ResolveDomainValidator(It.IsAny<string>(), HydrantIdCAPlugin.DnsValidationType))
+                .Returns(validator);
+            return factory;
+        }
+
+        [Fact]
+        public void ResolveDnsValidator_NoFactorySupplied_ReturnsNull()
+        {
+            var plugin = new HydrantIdCAPlugin();
+
+            Assert.Null(plugin.ResolveDnsValidator(NewFlow(), "example.com"));
+        }
+
+        [Fact]
+        public void ResolveDnsValidator_NoPluginForZone_ReturnsNullAfterTryingBothValidationTypes()
+        {
+            var factory = new Mock<IDomainValidatorFactory>();
+            factory.Setup(f => f.ResolveDomainValidator(It.IsAny<string>(), It.IsAny<string>()))
+                .Returns((IDomainValidator)null);
+            var plugin = MakePluginWithDnsFactory(null, factory.Object);
+
+            Assert.Null(plugin.ResolveDnsValidator(NewFlow(), "example.com"));
+            factory.Verify(f => f.ResolveDomainValidator("example.com", HydrantIdCAPlugin.DnsValidationType), Times.Once);
+            factory.Verify(f => f.ResolveDomainValidator("example.com", HydrantIdCAPlugin.DnsValidationTypeLegacy), Times.Once);
+        }
+
+        [Fact]
+        public void ResolveDnsValidator_LegacyValidationType_IsUsedWhenCanonicalMisses()
+        {
+            var validator = StubDnsValidator().Object;
+            var factory = new Mock<IDomainValidatorFactory>();
+            factory.Setup(f => f.ResolveDomainValidator("example.com", HydrantIdCAPlugin.DnsValidationType))
+                .Returns((IDomainValidator)null);
+            factory.Setup(f => f.ResolveDomainValidator("example.com", HydrantIdCAPlugin.DnsValidationTypeLegacy))
+                .Returns(validator);
+            var plugin = MakePluginWithDnsFactory(null, factory.Object);
+
+            Assert.Same(validator, plugin.ResolveDnsValidator(NewFlow(), "example.com"));
+        }
+
+        [Fact]
+        public void ResolveDnsValidator_FactoryThrows_ReturnsNullRatherThanPropagating()
+        {
+            var factory = new Mock<IDomainValidatorFactory>();
+            factory.Setup(f => f.ResolveDomainValidator(It.IsAny<string>(), It.IsAny<string>()))
+                .Throws(new InvalidOperationException("plugin directory unreadable"));
+            var plugin = MakePluginWithDnsFactory(null, factory.Object);
+
+            Assert.Null(plugin.ResolveDnsValidator(NewFlow(), "example.com"));
+        }
+
+        [Fact]
+        public async Task EnsureDomainsValidatedAsync_StagedRecordValidates_ReturnsAllValidatedAndCleansUp()
+        {
+            var validator = StubDnsValidator();
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>());
+            mockClient.Setup(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()))
+                .ReturnsAsync(new Domain
+                {
+                    Id = "d1",
+                    Status = DomainStatusEnum.Pending,
+                    Code = "identrust_validate=abc123",
+                    CodeInstructions = "publish TXT"
+                });
+            mockClient.Setup(c => c.GetSubmitCheckDomainValidationAsync("d1"))
+                .ReturnsAsync(new Domain { Id = "d1", Status = DomainStatusEnum.Validated });
+            var plugin = MakePluginWithDnsFactory(mockClient, StubDnsFactory(validator.Object).Object);
+
+            var result = await plugin.EnsureDomainsValidatedAsync(
+                mockClient.Object, NewFlow(), new List<string> { "auto.example.com" }, "IdenTrust");
+
+            Assert.True(result.AllValidated);
+            Assert.Null(result.PendingMessage);
+            // Record name is the domain itself, value is HydrantID's whole code string.
+            validator.Verify(v => v.StageValidation("auto.example.com", "identrust_validate=abc123", It.IsAny<CancellationToken>()), Times.Once);
+            validator.Verify(v => v.CleanupValidation("auto.example.com", It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task EnsureDomainsValidatedAsync_StageFails_FallsBackToManualWithoutPollingOrCleanup()
+        {
+            var validator = StubDnsValidator(stageSucceeds: false);
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>());
+            mockClient.Setup(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()))
+                .ReturnsAsync(new Domain
+                {
+                    Id = "d1",
+                    Status = DomainStatusEnum.Pending,
+                    Code = "identrust_validate=abc123",
+                    CodeInstructions = "publish TXT"
+                });
+            var plugin = MakePluginWithDnsFactory(mockClient, StubDnsFactory(validator.Object).Object);
+
+            var result = await plugin.EnsureDomainsValidatedAsync(
+                mockClient.Object, NewFlow(), new List<string> { "auto.example.com" }, "IdenTrust");
+
+            Assert.False(result.AllValidated);
+            Assert.Contains("publish TXT", result.PendingMessage);
+            mockClient.Verify(c => c.GetSubmitCheckDomainValidationAsync(It.IsAny<string>()), Times.Never);
+            validator.Verify(v => v.CleanupValidation(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task EnsureDomainsValidatedAsync_ValidationNeverCompletes_TimesOutToManualAndStillCleansUp()
+        {
+            var validator = StubDnsValidator();
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>());
+            mockClient.Setup(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()))
+                .ReturnsAsync(new Domain
+                {
+                    Id = "d1",
+                    Status = DomainStatusEnum.Pending,
+                    Code = "identrust_validate=abc123",
+                    CodeInstructions = "publish TXT"
+                });
+            mockClient.Setup(c => c.GetSubmitCheckDomainValidationAsync("d1"))
+                .ReturnsAsync(new Domain { Id = "d1", Status = DomainStatusEnum.Pending });
+            var plugin = MakePluginWithDnsFactory(mockClient, StubDnsFactory(validator.Object).Object);
+
+            var result = await plugin.EnsureDomainsValidatedAsync(
+                mockClient.Object, NewFlow(), new List<string> { "slow.example.com" }, "IdenTrust");
+
+            Assert.False(result.AllValidated);
+            Assert.Contains("publish TXT", result.PendingMessage);
+            validator.Verify(v => v.CleanupValidation("slow.example.com", It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task EnsureDomainsValidatedAsync_StatusCheckThrows_TreatedAsPendingNotFatal()
+        {
+            var validator = StubDnsValidator();
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>());
+            mockClient.Setup(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()))
+                .ReturnsAsync(new Domain
+                {
+                    Id = "d1",
+                    Status = DomainStatusEnum.Pending,
+                    Code = "identrust_validate=abc123",
+                    CodeInstructions = "publish TXT"
+                });
+            mockClient.Setup(c => c.GetSubmitCheckDomainValidationAsync("d1"))
+                .ThrowsAsync(new InvalidOperationException("HTTP 500"));
+            var plugin = MakePluginWithDnsFactory(mockClient, StubDnsFactory(validator.Object).Object);
+
+            var result = await plugin.EnsureDomainsValidatedAsync(
+                mockClient.Object, NewFlow(), new List<string> { "flaky.example.com" }, "IdenTrust");
+
+            Assert.False(result.AllValidated);
+            validator.Verify(v => v.CleanupValidation("flaky.example.com", It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task EnsureDomainsValidatedAsync_CleanupThrows_DoesNotFailAnOtherwiseValidEnrollment()
+        {
+            var validator = StubDnsValidator();
+            validator.Setup(v => v.CleanupValidation(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new InvalidOperationException("DNS API rejected the delete"));
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>());
+            mockClient.Setup(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()))
+                .ReturnsAsync(new Domain
+                {
+                    Id = "d1",
+                    Status = DomainStatusEnum.Pending,
+                    Code = "identrust_validate=abc123",
+                    CodeInstructions = "publish TXT"
+                });
+            mockClient.Setup(c => c.GetSubmitCheckDomainValidationAsync("d1"))
+                .ReturnsAsync(new Domain { Id = "d1", Status = DomainStatusEnum.Validated });
+            var plugin = MakePluginWithDnsFactory(mockClient, StubDnsFactory(validator.Object).Object);
+
+            var result = await plugin.EnsureDomainsValidatedAsync(
+                mockClient.Object, NewFlow(), new List<string> { "auto.example.com" }, "IdenTrust");
+
+            Assert.True(result.AllValidated);
+        }
+
+        [Fact]
+        public async Task EnsureDomainsValidatedAsync_NoCodeReturned_FallsBackToManualWithoutStaging()
+        {
+            var validator = StubDnsValidator();
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>());
+            mockClient.Setup(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()))
+                .ReturnsAsync(new Domain { Id = "d1", Status = DomainStatusEnum.Pending, CodeInstructions = "publish TXT" });
+            var plugin = MakePluginWithDnsFactory(mockClient, StubDnsFactory(validator.Object).Object);
+
+            var result = await plugin.EnsureDomainsValidatedAsync(
+                mockClient.Object, NewFlow(), new List<string> { "nocode.example.com" }, "IdenTrust");
+
+            Assert.False(result.AllValidated);
+            Assert.Contains("publish TXT", result.PendingMessage);
+            validator.Verify(v => v.StageValidation(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task EnsureDomainsValidatedAsync_DomainAlreadyValidated_NeverResolvesADnsPlugin()
+        {
+            var factory = StubDnsFactory(StubDnsValidator().Object);
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>
+            {
+                new Domain { Id = "d1", DomainName = "done.example.com", Status = DomainStatusEnum.Validated }
+            });
+            var plugin = MakePluginWithDnsFactory(mockClient, factory.Object);
+
+            var result = await plugin.EnsureDomainsValidatedAsync(
+                mockClient.Object, NewFlow(), new List<string> { "done.example.com" }, "IdenTrust");
+
+            Assert.True(result.AllValidated);
+            factory.Verify(f => f.ResolveDomainValidator(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        }
+
+        [Fact]
+        public void DnsTimingAccessors_Unconfigured_UseAnnotationDefaults()
+        {
+            var plugin = MakePlugin();
+
+            Assert.Equal(HydrantIdCAPlugin.DefaultDnsPropagationDelaySeconds, plugin.DnsPropagationDelaySeconds);
+            Assert.Equal(HydrantIdCAPlugin.DefaultDomainValidationTimeoutSeconds, plugin.DomainValidationTimeoutSeconds);
+            Assert.Equal(HydrantIdCAPlugin.DefaultDomainValidationPollIntervalSeconds, plugin.DomainValidationPollIntervalSeconds);
+        }
+
+        [Fact]
+        public void DnsPropagationDelaySeconds_ExplicitZero_IsHonouredRatherThanDefaulted()
+        {
+            var plugin = MakePluginWithDnsFactory(null, Mock.Of<IDomainValidatorFactory>());
+
+            Assert.Equal(0, plugin.DnsPropagationDelaySeconds);
+        }
+
+        [Fact]
+        public void DomainValidationTimeoutSeconds_ExplicitZero_FallsBackToDefault()
+        {
+            var data = ValidConnectionData();
+            data[HydrantIdCAPluginConfig.ConfigConstants.DomainValidationTimeoutSeconds] = 0;
+            var plugin = new HydrantIdCAPlugin();
+            plugin.Initialize(new FakeConfigProvider { CAConnectionData = data }, Mock.Of<ICertificateDataReader>());
+
+            Assert.Equal(HydrantIdCAPlugin.DefaultDomainValidationTimeoutSeconds, plugin.DomainValidationTimeoutSeconds);
+        }
+
+        [Fact]
+        public async Task Enroll_New_DnsAutomationValidatesDomain_ProceedsToIssueInTheSameCall()
+        {
+            var (_, pem, _) = MakeSelfSignedCert();
+            var trackingId = Guid.NewGuid();
+            var validator = StubDnsValidator();
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetPolicyList()).ReturnsAsync(new List<Policy>
+            {
+                new Policy { Id = Guid.NewGuid(), Name = "Test Policy", Details = new PolicyDetails { Validator = "IdenTrust" } }
+            });
+            mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>());
+            mockClient.Setup(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()))
+                .ReturnsAsync(new Domain
+                {
+                    Id = "d1",
+                    Status = DomainStatusEnum.Pending,
+                    Code = "identrust_validate=abc123",
+                    CodeInstructions = "publish TXT"
+                });
+            mockClient.Setup(c => c.GetSubmitCheckDomainValidationAsync("d1"))
+                .ReturnsAsync(new Domain { Id = "d1", Status = DomainStatusEnum.Validated });
+            mockClient.Setup(c => c.GetSubmitEnrollmentAsync(It.IsAny<CertRequestBody>())).ReturnsAsync(new CertRequestResult
+            {
+                RequestStatus = new CertRequestStatus { Id = trackingId.ToString() }
+            });
+            mockClient.Setup(c => c.GetSubmitGetCertificateByCsrAsync(trackingId.ToString()))
+                .ReturnsAsync(new Certificate { Id = trackingId });
+            mockClient.Setup(c => c.GetSubmitGetCertificateAsync(trackingId.ToString()))
+                .ReturnsAsync(new Certificate { Pem = pem, RevocationStatus = RevocationStatusEnum.Valid });
+            var plugin = MakePluginWithDnsFactory(mockClient, StubDnsFactory(validator.Object).Object);
+
+            var result = await plugin.Enroll(SampleCsr, "subj", null, ProductInfo(), RequestFormat.PKCS10, EnrollmentType.New);
+
+            // The whole cycle -- stage TXT, wait for DCV, submit the CSR, wait for the cert --
+            // completes inside one Enroll call, with no EXTERNALVALIDATION round trip.
+            Assert.Equal((int)EndEntityStatus.GENERATED, result.Status);
+            Assert.False(string.IsNullOrEmpty(result.Certificate));
+            validator.Verify(v => v.StageValidation(It.IsAny<string>(), "identrust_validate=abc123", It.IsAny<CancellationToken>()), Times.Once);
+            validator.Verify(v => v.CleanupValidation(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+            mockClient.Verify(c => c.GetSubmitEnrollmentAsync(It.IsAny<CertRequestBody>()), Times.Once);
         }
 
         // ---------------------------------------------------------------------

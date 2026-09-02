@@ -34,6 +34,9 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             public static string HydrantIdOrgCityProvPostalCodeCountry = "HydrantIdOrgCityProvPostalCodeCountry";
             public static string HydrantIdEmailAddress = "HydrantIdEmailAddress";
             public static string HydrantIdPhoneNumber = "HydrantIdPhoneNumber";
+            public static string DnsPropagationDelaySeconds = "DnsPropagationDelaySeconds";
+            public static string DomainValidationTimeoutSeconds = "DomainValidationTimeoutSeconds";
+            public static string DomainValidationPollIntervalSeconds = "DomainValidationPollIntervalSeconds";
             public static string DefaultPageSize = "DefaultPageSize";
             public static string Enabled = "Enabled";
         }
@@ -50,6 +53,11 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             public string HydrantIdOrgCityProvPostalCodeCountry { get; set; }
             public string HydrantIdEmailAddress { get; set; }
             public string HydrantIdPhoneNumber { get; set; }
+            // Nullable so an absent connector field (null) stays distinguishable from an
+            // operator explicitly setting 0, which disables the propagation delay.
+            public int? DnsPropagationDelaySeconds { get; set; }
+            public int? DomainValidationTimeoutSeconds { get; set; }
+            public int? DomainValidationPollIntervalSeconds { get; set; }
             public bool Enabled { get; set; }
         }
 
@@ -133,6 +141,27 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                     Hidden = false,
                     DefaultValue = "",
                     Type = "String"
+                },
+                [ConfigConstants.DnsPropagationDelaySeconds] = new PropertyConfigInfo()
+                {
+                    Comments = "Seconds to wait after a DNS provider plugin writes the validation TXT record before asking HydrantId to check it, allowing the record to propagate to the authoritative nameservers. Only used when a DNS provider plugin is handling the record; ignored on the manual validation path. Set to 0 to skip the delay and start polling immediately.",
+                    Hidden = false,
+                    DefaultValue = 30,
+                    Type = "Number"
+                },
+                [ConfigConstants.DomainValidationTimeoutSeconds] = new PropertyConfigInfo()
+                {
+                    Comments = "Maximum seconds to hold the enrollment open while polling HydrantId for domain validation to complete after a DNS provider plugin has staged the TXT record. On timeout the enrollment falls back to external validation (manual DNS publish and resubmit) rather than failing.",
+                    Hidden = false,
+                    DefaultValue = 300,
+                    Type = "Number"
+                },
+                [ConfigConstants.DomainValidationPollIntervalSeconds] = new PropertyConfigInfo()
+                {
+                    Comments = "Seconds between HydrantId domain validation status checks while waiting for a staged DNS record to be validated.",
+                    Hidden = false,
+                    DefaultValue = 10,
+                    Type = "Number"
                 },
                 [ConfigConstants.Enabled] = new PropertyConfigInfo()
                 {

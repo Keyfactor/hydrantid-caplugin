@@ -28,5 +28,6 @@ namespace Keyfactor.HydrantId.Interfaces
         string CodeValidUntil { get;set; }
         string CreatedAt { get;set; }
         string UpdatedAt { get;set; }
+        string DeletedAt { get;set; }
     }
 }
