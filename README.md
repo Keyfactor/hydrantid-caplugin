@@ -286,10 +286,34 @@ The plugin supports the following standard CRL revocation reasons:
         Domains that are already `VALIDATED`, or covered by an already-validated parent domain, skip DCV
         entirely and never touch a DNS provider plugin.
         
-        > **Note on validation type.** DNS provider plugins are resolved with a validation type of
-        > `dns-01` first, then `DNS`. The reference ACME CA plugin resolves with `dns-01` at runtime while
-        > that project's DNS plugin documentation describes `GetValidationType()` as returning `DNS`, so
-        > both spellings are attempted rather than silently missing a plugin that is deployed.
+        #### Which domain the DNS plugin must be registered against
+        
+        The Gateway resolves a domain validation configuration by **exact string match** on the domains
+        registered for it (`Domains.Domain = @DomainName`) — there is no suffix or wildcard matching. So a
+        configuration registered for `www.example.com` does not match `example.com`, and vice versa.
+        
+        Because validation now targets the base domain, the plugin looks the configuration up under **two**
+        names, in order:
+        
+        1. the base domain the record will be written on (`example.com`)
+        2. the name the CSR asked for (`www.example.com`)
+        
+        The first match wins, and whichever plugin is found writes the record on the base domain — its own
+        zone discovery locates the containing zone. Either registration style therefore works, but
+        **registering the zone apex is recommended**: one entry then covers every hostname in the zone,
+        whereas per-hostname entries need a new one for each name you enroll.
+        
+        If neither name matches you will see this in the Gateway log, and the enrollment falls back to
+        manual validation:
+        
+        ```
+        No configuration found for given domain: 'example.com' and validation type: 'DNS'.
+        ```
+        
+        > **Note on validation type.** Plugins are resolved with a validation type of `DNS` first, then
+        > `dns-01`. The Gateway stores whatever the plugin's `GetValidationType()` returns and matches on it
+        > exactly: the LuaDNS plugin reports `DNS`, while the reference ACME CA plugin resolves with
+        > `dns-01`. Both are attempted so either style of plugin is found.
         
         ### Gateway Registration Notes
         
@@ -454,6 +478,9 @@ Confirm via the policy list that `details.validator` is unset for the policy und
 | C14 | Second hostname in a validated zone | After C13, enroll for a different hostname in the same zone (e.g. `host2.example.com`) | Issues immediately with no DNS write and no new domain validation record — covered by the validated base domain |
 | C15 | Multi-label suffix domain | Enroll for a host under a `co.uk`-style domain if one is available | Validates `example.co.uk`, not `co.uk` |
 | C16 | Unrecognized multi-label suffix | Enroll for a host under a TLD whose two-label suffix is not in the built-in list | First create is rejected by HydrantId, plugin retries with the fully-qualified name, enrollment proceeds |
+| C17 | DNS plugin registered on the zone apex | Register the DNS provider configuration for `example.com`, enroll for `host.example.com` | Resolves on the first lookup name; log shows `matched on 'example.com'` |
+| C18 | DNS plugin registered per hostname | Register the configuration for `host.example.com` only, enroll for `host.example.com` | Still resolves, on the second lookup name; log shows `matched on 'host.example.com'`; TXT is written on `example.com` |
+| C19 | DNS plugin registered for an unrelated zone | Register only some other zone, enroll for `host.example.com` | Falls back to external validation; Gateway log shows "No configuration found for given domain" |
 
 ### D. Renewal
 
