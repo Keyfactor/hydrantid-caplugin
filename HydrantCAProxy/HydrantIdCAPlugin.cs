@@ -27,10 +27,77 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
     public class HydrantIdCAPlugin : IAnyCAPlugin
     {
         private static readonly ILogger _logger = LogHandler.GetClassLogger<HydrantIdCAPlugin>();
-        private RequestManager _requestManager;
+        private readonly RequestManager _requestManager = new RequestManager();
         private IAnyCAPluginConfigProvider Config { get; set; }
         private ICertificateDataReader certDataReader;
         private HydrantIdCAPluginConfig.Config _config;
+
+        internal Func<IAnyCAPluginConfigProvider, IHydrantIdClient> ClientFactory { get; set; }
+            = config => new HydrantIdClient(config);
+
+        private readonly IDomainValidatorFactory _validatorFactory;
+
+        // The validation type DNS provider plugins register themselves under. The ACME CA plugin
+        // resolves with "dns-01" at runtime, while that repo's DNS plugin documentation describes
+        // GetValidationType() as returning "DNS" -- so try the canonical value first and fall back
+        // to the legacy spelling rather than silently missing a plugin that is actually deployed.
+        internal const string DnsValidationType = "dns-01";
+        internal const string DnsValidationTypeLegacy = "DNS";
+
+        internal const int DefaultDnsPropagationDelaySeconds = 30;
+        internal const int DefaultDomainValidationTimeoutSeconds = 300;
+        internal const int DefaultDomainValidationPollIntervalSeconds = 10;
+
+        /// <summary>
+        /// Used when the Gateway does not supply a DNS provider factory. Domain validation still
+        /// works, but only on the manual path -- enrollment returns EXTERNALVALIDATION carrying the
+        /// TXT record for an operator to publish before resubmitting.
+        /// </summary>
+        public HydrantIdCAPlugin()
+        {
+        }
+
+        /// <summary>
+        /// Preferred constructor. <paramref name="validatorFactory"/> is supplied by the Gateway and
+        /// resolves whichever deployed DNS provider plugin owns a given zone, letting this plugin
+        /// write HydrantID's validation TXT record itself and issue without operator involvement.
+        /// Unlike the ACME CA plugin a null factory is tolerated rather than fatal, because HydrantID
+        /// policies using a private CA validator -- or no validator at all -- issue fine without any
+        /// DNS automation.
+        /// </summary>
+        public HydrantIdCAPlugin(IDomainValidatorFactory validatorFactory)
+        {
+            _validatorFactory = validatorFactory;
+        }
+
+        // Command leaves a numeric connector field at 0 when the template has never been saved
+        // (the same gap RenewalDays works around -- ADO 81803), so the annotation default is
+        // re-applied here rather than trusting the deserialized value.
+        // A delay of 0 is meaningful (skip waiting), so only a null -- an absent connector
+        // field -- or a negative value falls back to the annotation default.
+        internal int DnsPropagationDelaySeconds =>
+            _config?.DnsPropagationDelaySeconds is int delay && delay >= 0
+                ? delay
+                : DefaultDnsPropagationDelaySeconds;
+
+        // A budget or interval of 0 is nonsense, so those require a positive value.
+        internal int DomainValidationTimeoutSeconds =>
+            _config?.DomainValidationTimeoutSeconds is int timeout && timeout > 0
+                ? timeout
+                : DefaultDomainValidationTimeoutSeconds;
+
+        internal int DomainValidationPollIntervalSeconds =>
+            _config?.DomainValidationPollIntervalSeconds is int interval && interval > 0
+                ? interval
+                : DefaultDomainValidationPollIntervalSeconds;
+
+        // Minimal IAnyCAPluginConfigProvider over a raw connectionInfo dictionary, used by
+        // ValidateCAConnectionInfo -- that entry point runs before the Gateway ever calls
+        // Initialize(), so Config would otherwise be null when Ping() builds a client.
+        private sealed class ConnectionInfoProvider : IAnyCAPluginConfigProvider
+        {
+            public Dictionary<string, object> CAConnectionData { get; set; }
+        }
 
         public void Initialize(IAnyCAPluginConfigProvider configProvider, ICertificateDataReader certificateDataReader)
         {
@@ -84,7 +151,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             HydrantIdCAPluginConfig.ConfigConstants.HydrantIdAuthKey
         };
 
-        private static string MaskConfigForLog(string rawJson)
+        internal static string MaskConfigForLog(string rawJson)
         {
             if (string.IsNullOrEmpty(rawJson)) return rawJson;
             try
@@ -104,23 +171,12 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                 }
                 return token.ToString(Newtonsoft.Json.Formatting.None);
             }
-            catch
+            catch (Exception ex)
             {
+                _logger.LogTrace("MaskConfigForLog: failed to parse config JSON for masking, redacting entire payload: {Message}", ex.Message);
                 return "***REDACTED***";
             }
         }
-
-        private static List<string> CheckRequiredValues(Dictionary<string, object> connectionInfo, params string[] args)
-        {
-            List<string> errors = new List<string>();
-            foreach (string s in args)
-                if (string.IsNullOrEmpty(connectionInfo[s] as string))
-                    errors.Add($"{s} is a required value");
-            return errors;
-        }
-
-        private static readonly Func<string, string> pemify = ss =>
-            ss.Length <= 64 ? ss : ss.Substring(0, 64) + "\n" + pemify(ss.Substring(64));
 
         public async Task Ping()
         {
@@ -145,8 +201,18 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                     return;
                 }
 
-                flow.Step("PingCA");
                 _logger.LogDebug("Pinging HydrantId to validate connection");
+                var client = ClientFactory(Config);
+                var reachable = await client.Ping();
+
+                if (!reachable)
+                {
+                    flow.Fail("PingCA", "GET /policies did not return a success status");
+                    _logger.LogError("Ping: HydrantId connectivity check failed -- GET /policies did not return a success status.");
+                    throw new Exception("HydrantId connectivity check failed.");
+                }
+
+                flow.Step("PingCA", "connectivity verified");
             }
             finally
             {
@@ -169,6 +235,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             var rawData = JsonConvert.SerializeObject(connectionInfo);
             _logger.LogTrace("ValidateCAConnectionInfo: connectionInfo JSON (sensitive keys masked): {Json}", MaskConfigForLog(rawData));
 
+            Config = new ConnectionInfoProvider { CAConnectionData = connectionInfo };
             _config = JsonConvert.DeserializeObject<HydrantIdCAPluginConfig.Config>(rawData);
 
             _logger.LogTrace("ValidateCAConnectionInfo: HydrantIdBaseUrl='{BaseUrl}', Enabled={Enabled}",
@@ -221,7 +288,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
 
             try
             {
-                var client = new HydrantIdClient(Config);
+                var client = ClientFactory(Config);
                 List<Policy> policies = null;
 
                 flow.Step("FetchPolicies", () =>
@@ -262,10 +329,9 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             using var flow = new FlowLogger(_logger, $"Synchronize(fullSync={fullSync})");
             _logger.MethodEntry();
             _logger.LogTrace("Synchronize: lastSync={LastSync}, fullSync={FullSync}", lastSync?.ToString() ?? "(null)", fullSync);
-            _requestManager = new RequestManager();
 
             var certs = new BlockingCollection<ICertificatesResponseItem>(100);
-            var client = new HydrantIdClient(Config);
+            var client = ClientFactory(Config);
             var processedCount = 0;
             var skippedCount = 0;
 
@@ -382,7 +448,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
         }
 
         // Helper method to extract end entity certificate from PEM chain
-        private string GetEndEntityCertificate(string certData)
+        internal string GetEndEntityCertificate(string certData)
         {
             _logger.LogTrace("GetEndEntityCertificate: input length={Length}", certData?.Length ?? 0);
 
@@ -453,7 +519,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
         }
 
         // Helper method to export X509Certificate2Collection to PEM format
-        private string ExportCollectionToPem(X509Certificate2Collection collection)
+        internal string ExportCollectionToPem(X509Certificate2Collection collection)
         {
             var sb = new StringBuilder();
             foreach (var cert in collection)
@@ -472,9 +538,8 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             _logger.LogTrace("Enroll: csr length={CsrLen}, subject='{Subject}', enrollmentType={Type}, productID='{ProductId}'",
                 csr?.Length ?? 0, subject ?? "(null)", enrollmentType, productInfo?.ProductID ?? "(null)");
 
-            _requestManager = new RequestManager();
             Certificate csrTrackingResponse = null;
-            var client = new HydrantIdClient(Config);
+            var client = ClientFactory(Config);
 
             try
             {
@@ -523,6 +588,10 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
 
                     _logger.LogTrace("Enroll: matched policy: {Json}", JsonConvert.SerializeObject(policyId));
                     flow.Step("MatchPolicy", $"policyId={policyId.Id}");
+
+                    var domainValidationResult = await EnsureDomainsValidatedForPolicyAsync(client, flow, policyId, csr, san);
+                    if (domainValidationResult != null)
+                        return domainValidationResult;
 
                     var enrollmentRequest = _requestManager.GetEnrollmentRequest(policyId.Id, productInfo, csr, san);
                     _logger.LogTrace("Enroll: enrollment request JSON: {Json}", JsonConvert.SerializeObject(enrollmentRequest));
@@ -662,6 +731,10 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                             };
                         }
 
+                        var reissueDomainValidationResult = await EnsureDomainsValidatedForPolicyAsync(client, flow, policyId, csr, san);
+                        if (reissueDomainValidationResult != null)
+                            return reissueDomainValidationResult;
+
                         var reissueRequest = _requestManager.GetEnrollmentRequest(policyId.Id, productInfo, csr, san);
                         _logger.LogTrace("Enroll: re-issue request JSON: {Json}", JsonConvert.SerializeObject(reissueRequest));
 
@@ -746,14 +819,425 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             }
         }
 
+        /// <summary>
+        /// Resolves the validator for the matched policy, computes the domains (CN + DNS SANs) that
+        /// need DNS-based domain control validation, and ensures each is VALIDATED before a CSR is
+        /// submitted. Returns null when enrollment may proceed -- either because every domain is
+        /// validated, or because the matched policy has no validator configured, in which case DCV
+        /// is not required and is skipped entirely (not every policy uses domain validation).
+        /// Returns a non-null EXTERNALVALIDATION EnrollmentResult when one or more domains are still
+        /// pending and the caller should return immediately instead of proceeding.
+        /// </summary>
+        internal async Task<EnrollmentResult> EnsureDomainsValidatedForPolicyAsync(
+            IHydrantIdClient client, FlowLogger flow, Policy policyId, string csr, Dictionary<string, string[]> san)
+        {
+            var validatorId = policyId.Details?.Validator;
+            if (string.IsNullOrWhiteSpace(validatorId))
+            {
+                flow.Skip("DomainValidation", $"policy '{policyId.Name}' has no validator configured; skipping DCV");
+                return null;
+            }
+
+            var domainsToValidate = _requestManager.GetDomainsToValidate(csr, san);
+            flow.Step("ComputeDomainsToValidate", string.Join(", ", domainsToValidate));
+
+            bool allValidated = true;
+            string pendingMessage = null;
+            await flow.StepAsync("EnsureDomainsValidated", async () =>
+            {
+                (allValidated, pendingMessage) = await EnsureDomainsValidatedAsync(client, flow, domainsToValidate, validatorId);
+            });
+
+            if (allValidated)
+                return null;
+
+            flow.Fail("DomainValidation", "one or more domains pending DCV");
+            return new EnrollmentResult
+            {
+                Status = (int)EndEntityStatus.EXTERNALVALIDATION,
+                StatusMessage = pendingMessage
+            };
+        }
+
+        /// <summary>
+        /// Builds the org/contact "payload" some HydrantID validators (e.g. IdenTrust) require on
+        /// domain validation creation, from the optional Hydrant Id* config fields. Returns null
+        /// (and therefore omits "payload" from the request entirely) when none are configured, so
+        /// validators that don't need it (e.g. DigiCert, PrivateCA) are unaffected.
+        /// </summary>
+        internal DomainValidationOrgPayload BuildOrgPayload()
+        {
+            if (_config == null)
+                return null;
+
+            if (string.IsNullOrEmpty(_config.HydrantIdOrgName) &&
+                string.IsNullOrEmpty(_config.HydrantIdOrgPrimaryContactFullName) &&
+                string.IsNullOrEmpty(_config.HydrantIdOrgStreetAddress) &&
+                string.IsNullOrEmpty(_config.HydrantIdOrgCityProvPostalCodeCountry) &&
+                string.IsNullOrEmpty(_config.HydrantIdEmailAddress) &&
+                string.IsNullOrEmpty(_config.HydrantIdPhoneNumber))
+            {
+                return null;
+            }
+
+            return new DomainValidationOrgPayload
+            {
+                OrgName = _config.HydrantIdOrgName,
+                OrgPrimaryContactFullName = _config.HydrantIdOrgPrimaryContactFullName,
+                OrgStreetAddress = _config.HydrantIdOrgStreetAddress,
+                OrgCityProvPostalCodeCountry = _config.HydrantIdOrgCityProvPostalCodeCountry,
+                EmailAddress = _config.HydrantIdEmailAddress,
+                PhoneNumber = _config.HydrantIdPhoneNumber
+            };
+        }
+
+        /// <summary>
+        /// Ensures every domain in <paramref name="domainsToValidate"/> is VALIDATED at HydrantID
+        /// before a CSR is submitted, automating the TXT record through a Keyfactor DNS provider
+        /// plugin whenever one owns the zone. Runs in three phases, mirroring the ACME CA plugin's
+        /// stage / verify / cleanup lifecycle:
+        ///
+        ///   1. Stage   -- create, regenerate or re-check each HydrantID domain record to obtain its
+        ///                 validation code, then have the resolved IDomainValidator write it.
+        ///   2. Wait    -- after a propagation delay, poll HydrantID until every staged domain
+        ///                 reports VALIDATED or the configured budget runs out.
+        ///   3. Cleanup -- remove every record this call staged, whatever the outcome.
+        ///
+        /// Domains that could not be automated (no factory, no plugin for the zone, or no code
+        /// returned) fall back to the manual path and appear in the returned pending message, so a
+        /// CA with no DNS plugin deployed behaves exactly as it did before automation existed.
+        ///
+        /// Command re-invokes Enroll() from scratch on resubmit, and this plugin has no local state
+        /// store, so listing existing domains and filtering by name is the only way to recover a
+        /// previously-started validation's id across Enroll() calls.
+        /// </summary>
+        internal async Task<(bool AllValidated, string PendingMessage)> EnsureDomainsValidatedAsync(
+            IHydrantIdClient client, FlowLogger flow, List<string> domainsToValidate, string validatorId)
+        {
+            // HydrantID soft-deletes domain records rather than removing them, and it is not
+            // established whether the list endpoint filters them out. A soft-deleted record must
+            // never be matched: re-checking one returns HTTP 500 ("Cannot read properties of null
+            // (reading 'accountId')"), which would fail the enrollment instead of simply starting
+            // a fresh validation for the domain.
+            var existingDomains = (await client.GetDomainListAsync())
+                .Where(d => string.IsNullOrEmpty(d.DeletedAt))
+                .ToList();
+
+            // Records this call wrote, and is therefore responsible for removing.
+            var staged = new List<StagedValidation>();
+            // Domains left for an operator to publish by hand.
+            var pending = new List<(string Domain, string Instructions)>();
+
+            try
+            {
+                foreach (var domainName in domainsToValidate)
+                {
+                    var match = existingDomains.FirstOrDefault(d =>
+                        string.Equals(d.DomainName, domainName, StringComparison.OrdinalIgnoreCase));
+
+                    if (match == null && IsCoveredByValidatedAncestor(domainName, existingDomains, out var coveringDomain))
+                    {
+                        flow.Step("DomainValidation.CoveredByValidatedParent", $"domain='{domainName}', parent='{coveringDomain}'");
+                        continue;
+                    }
+
+                    Domain domain;
+                    if (match == null || match.Status == DomainStatusEnum.Expired)
+                    {
+                        // HydrantID's "regenerate code" action for an expired domain is the same
+                        // POST used to start a validation from scratch -- confirmed idempotent per
+                        // domain name (does not create a duplicate record) against staging.
+                        flow.Step("DomainValidation.CreateOrRegenerate",
+                            $"domain='{domainName}', priorStatus={(match == null ? "(none)" : match.Status.ToString())}");
+                        var payload = _requestManager.GetCreateDomainValidationRequest(domainName, validatorId, _config?.HydrantIdAccountId, BuildOrgPayload());
+                        domain = await client.GetSubmitCreateDomainValidationAsync(payload);
+                    }
+                    else if (match.Status != DomainStatusEnum.Validated)
+                    {
+                        flow.Step("DomainValidation.Recheck", $"domain='{domainName}', status={match.Status}, domainId='{match.Id}'");
+                        domain = await client.GetSubmitCheckDomainValidationAsync(match.Id);
+                    }
+                    else
+                    {
+                        flow.Step("DomainValidation.AlreadyValidated", $"domain='{domainName}'");
+                        continue;
+                    }
+
+                    if (domain?.Status == DomainStatusEnum.Validated)
+                    {
+                        flow.Step("DomainValidation.NowValidated", $"domain='{domainName}'");
+                        continue;
+                    }
+
+                    flow.Step("DomainValidation.StillPending", $"domain='{domainName}', status={domain?.Status.ToString() ?? "(null response)"}");
+                    var instructions = domain?.CodeInstructions ?? "(no instructions returned by HydrantId)";
+
+                    var dnsValidator = ResolveDnsValidator(flow, domainName);
+                    if (dnsValidator == null)
+                    {
+                        pending.Add((domainName, instructions));
+                        continue;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(domain?.Code) || string.IsNullOrWhiteSpace(domain?.Id))
+                    {
+                        flow.Skip($"DomainValidation.Stage:{domainName}", "HydrantId returned no validation code or domain id to publish");
+                        pending.Add((domainName, instructions));
+                        continue;
+                    }
+
+                    if (await StageDnsRecordAsync(flow, dnsValidator, domainName, domain.Code))
+                        staged.Add(new StagedValidation(domainName, domain.Id, instructions, dnsValidator));
+                    else
+                        pending.Add((domainName, instructions));
+                }
+
+                if (staged.Count > 0)
+                {
+                    var propagationDelay = DnsPropagationDelaySeconds;
+                    flow.Step("DomainValidation.PropagationDelay", $"{propagationDelay}s for {staged.Count} staged record(s)");
+                    await Task.Delay(TimeSpan.FromSeconds(propagationDelay));
+
+                    await flow.StepAsync("DomainValidation.AwaitValidation", async () =>
+                    {
+                        await AwaitStagedValidationsAsync(client, flow, staged, pending);
+                    });
+                }
+            }
+            finally
+            {
+                await CleanupStagedRecordsAsync(flow, staged);
+            }
+
+            if (pending.Count == 0)
+                return (true, null);
+
+            var message = "Domain validation required before this certificate can be issued. " +
+                "Publish the following DNS record(s), then resubmit:\n" +
+                string.Join("\n", pending.Select(p => $"  - {p.Domain}: {p.Instructions}"));
+
+            return (false, message);
+        }
+
+        /// <summary>
+        /// A HydrantID domain validation whose TXT record was written by this enrollment, and which
+        /// must therefore be polled to completion and then cleaned up.
+        /// </summary>
+        internal sealed class StagedValidation
+        {
+            public StagedValidation(string domain, string domainId, string instructions, IDomainValidator validator)
+            {
+                Domain = domain;
+                DomainId = domainId;
+                Instructions = instructions;
+                Validator = validator;
+            }
+
+            public string Domain { get; }
+            public string DomainId { get; }
+            public string Instructions { get; }
+            public IDomainValidator Validator { get; }
+        }
+
+        /// <summary>
+        /// Resolves the DNS provider plugin that owns <paramref name="domainName"/>'s zone, or null
+        /// when automation is unavailable for it. Never throws: any failure here degrades to the
+        /// manual validation path, which is strictly better than failing an enrollment because
+        /// plugin resolution misbehaved.
+        /// </summary>
+        internal IDomainValidator ResolveDnsValidator(FlowLogger flow, string domainName)
+        {
+            if (_validatorFactory == null)
+            {
+                flow.Skip($"DomainValidation.ResolveValidator:{domainName}",
+                    "no IDomainValidatorFactory supplied by the Gateway; manual DNS validation only");
+                return null;
+            }
+
+            try
+            {
+                var validator = _validatorFactory.ResolveDomainValidator(domainName, DnsValidationType)
+                                ?? _validatorFactory.ResolveDomainValidator(domainName, DnsValidationTypeLegacy);
+
+                if (validator == null)
+                {
+                    flow.Skip($"DomainValidation.ResolveValidator:{domainName}",
+                        "no DNS provider plugin is configured for this zone");
+                    return null;
+                }
+
+                flow.Step($"DomainValidation.ResolveValidator:{domainName}", validator.GetType().Name);
+                return validator;
+            }
+            catch (Exception ex)
+            {
+                flow.Fail($"DomainValidation.ResolveValidator:{domainName}", ex.Message);
+                _logger.LogWarning(ex, "ResolveDnsValidator: could not resolve a DNS provider plugin for '{Domain}', falling back to manual validation: {Message}",
+                    domainName, ex.Message);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Writes HydrantID's validation TXT record via a DNS provider plugin. The record name is the
+        /// domain itself rather than an _acme-challenge subdomain, and the value is HydrantID's whole
+        /// code string, matching the codeInstructions HydrantID returns: "create a new DNS TXT record
+        /// for the domain containing the following data: &lt;validator&gt;_validate=&lt;token&gt;".
+        /// Returns false rather than throwing, so the domain falls back to the manual path.
+        /// </summary>
+        internal async Task<bool> StageDnsRecordAsync(FlowLogger flow, IDomainValidator dnsValidator, string domainName, string code)
+        {
+            try
+            {
+                var result = await dnsValidator.StageValidation(domainName, code, CancellationToken.None);
+
+                if (result == null || !result.Success)
+                {
+                    flow.Fail($"DomainValidation.Stage:{domainName}",
+                        result?.ErrorMessage ?? "DNS provider plugin returned no result");
+                    _logger.LogWarning("StageDnsRecordAsync: {Validator} failed to write the TXT record for '{Domain}': {Error}",
+                        dnsValidator.GetType().Name, domainName, result?.ErrorMessage ?? "(no result)");
+                    return false;
+                }
+
+                flow.Step($"DomainValidation.Stage:{domainName}", $"TXT written via {dnsValidator.GetType().Name}");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                flow.Fail($"DomainValidation.Stage:{domainName}", ex.Message);
+                _logger.LogWarning(ex, "StageDnsRecordAsync: {Validator} threw writing the TXT record for '{Domain}': {Message}",
+                    dnsValidator.GetType().Name, domainName, ex.Message);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Polls HydrantID until every staged domain reports VALIDATED or the configured budget is
+        /// exhausted. Anything still unvalidated at the deadline is appended to
+        /// <paramref name="pending"/>, which sends the enrollment down the EXTERNALVALIDATION path
+        /// rather than failing it -- the staged code stays usable until codeValidUntil, so a resubmit
+        /// can still pick it up.
+        /// </summary>
+        internal async Task AwaitStagedValidationsAsync(
+            IHydrantIdClient client, FlowLogger flow, List<StagedValidation> staged, List<(string Domain, string Instructions)> pending)
+        {
+            var timeout = TimeSpan.FromSeconds(DomainValidationTimeoutSeconds);
+            var interval = TimeSpan.FromSeconds(DomainValidationPollIntervalSeconds);
+            var stopwatch = Stopwatch.StartNew();
+            var remaining = staged.ToList();
+
+            while (true)
+            {
+                var stillPending = new List<StagedValidation>();
+
+                foreach (var entry in remaining)
+                {
+                    Domain rechecked = null;
+                    try
+                    {
+                        rechecked = await client.GetSubmitCheckDomainValidationAsync(entry.DomainId);
+                    }
+                    catch (Exception ex)
+                    {
+                        // A transient check failure should cost one tick, not the whole wait.
+                        _logger.LogWarning(ex, "AwaitStagedValidationsAsync: check failed for '{Domain}' (domainId='{DomainId}'), retrying: {Message}",
+                            entry.Domain, entry.DomainId, ex.Message);
+                    }
+
+                    if (rechecked?.Status == DomainStatusEnum.Validated)
+                        flow.Step("DomainValidation.NowValidated", $"domain='{entry.Domain}' after {stopwatch.Elapsed.TotalSeconds:F0}s");
+                    else
+                        stillPending.Add(entry);
+                }
+
+                remaining = stillPending;
+
+                if (remaining.Count == 0)
+                    return;
+
+                if (stopwatch.Elapsed + interval >= timeout)
+                    break;
+
+                await Task.Delay(interval);
+            }
+
+            foreach (var entry in remaining)
+            {
+                flow.Fail($"DomainValidation.Timeout:{entry.Domain}",
+                    $"still pending after {stopwatch.Elapsed.TotalSeconds:F0}s (budget {DomainValidationTimeoutSeconds}s)");
+                pending.Add((entry.Domain, entry.Instructions));
+            }
+        }
+
+        /// <summary>
+        /// Removes every TXT record staged by this enrollment. A leftover record cannot break
+        /// issuance, so a cleanup failure is logged and swallowed rather than allowed to fail an
+        /// enrollment that otherwise succeeded.
+        /// </summary>
+        internal async Task CleanupStagedRecordsAsync(FlowLogger flow, List<StagedValidation> staged)
+        {
+            foreach (var entry in staged)
+            {
+                try
+                {
+                    var result = await entry.Validator.CleanupValidation(entry.Domain, CancellationToken.None);
+
+                    if (result == null || !result.Success)
+                    {
+                        flow.Fail($"DomainValidation.Cleanup:{entry.Domain}",
+                            result?.ErrorMessage ?? "DNS provider plugin returned no result");
+                        _logger.LogWarning("CleanupStagedRecordsAsync: {Validator} failed to remove the TXT record for '{Domain}': {Error}",
+                            entry.Validator.GetType().Name, entry.Domain, result?.ErrorMessage ?? "(no result)");
+                    }
+                    else
+                    {
+                        flow.Step($"DomainValidation.Cleanup:{entry.Domain}", "TXT record removed");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    flow.Fail($"DomainValidation.Cleanup:{entry.Domain}", ex.Message);
+                    _logger.LogWarning(ex, "CleanupStagedRecordsAsync: {Validator} threw removing the TXT record for '{Domain}': {Message}",
+                        entry.Validator.GetType().Name, entry.Domain, ex.Message);
+                }
+            }
+        }
+
+        /// <summary>
+        /// True when <paramref name="domainName"/> is itself, or a subdomain of, some other domain
+        /// in <paramref name="existingDomains"/> that is already Validated -- per HydrantID's own
+        /// domain-validation documentation, DCV is scoped to the base domain and subdomains at any
+        /// depth are covered without a separate validation record.
+        /// </summary>
+        internal static bool IsCoveredByValidatedAncestor(string domainName, List<Domain> existingDomains, out string coveringDomain)
+        {
+            coveringDomain = null;
+
+            foreach (var candidate in existingDomains)
+            {
+                if (candidate.Status != DomainStatusEnum.Validated ||
+                    !string.IsNullOrEmpty(candidate.DeletedAt) ||
+                    string.IsNullOrEmpty(candidate.DomainName))
+                    continue;
+
+                if (string.Equals(domainName, candidate.DomainName, StringComparison.OrdinalIgnoreCase) ||
+                    domainName.EndsWith("." + candidate.DomainName, StringComparison.OrdinalIgnoreCase))
+                {
+                    coveringDomain = candidate.DomainName;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         public async Task<int> Revoke(string caRequestID, string hexSerialNumber, uint revocationReason)
         {
             using var flow = new FlowLogger(_logger, $"Revoke({caRequestID ?? "null"})");
             _logger.MethodEntry();
             _logger.LogTrace("Revoke: caRequestID='{CaRequestId}', hexSerialNumber='{SerialNumber}', revocationReason={Reason}",
                 caRequestID ?? "(null)", hexSerialNumber ?? "(null)", revocationReason);
-
-            _requestManager = new RequestManager();
 
             try
             {
@@ -765,7 +1249,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                         throw new ArgumentException($"caRequestID '{caRequestID}' is too short ({caRequestID.Length} chars) to extract a UUID.", nameof(caRequestID));
                 });
 
-                var client = new HydrantIdClient(Config);
+                var client = ClientFactory(Config);
                 var hydrantId = caRequestID.Substring(0, 36);
                 _logger.LogTrace("Revoke: extracted UUID='{Uuid}'", hydrantId);
 
@@ -821,13 +1305,16 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             }
         }
 
-        private async Task<Certificate> GetCertificateOnTimerAsync(string id)
+        internal int PollIntervalMs { get; set; } = 1000;
+        internal int PollTimeoutMs { get; set; } = 30000;
+
+        internal async Task<Certificate> GetCertificateOnTimerAsync(string id)
         {
             _logger.LogTrace("GetCertificateOnTimerAsync: waiting for certificate with tracking ID='{Id}'", id ?? "(null)");
             var stopwatch = Stopwatch.StartNew();
-            var client = new HydrantIdClient(Config);
+            var client = ClientFactory(Config);
 
-            while (stopwatch.Elapsed < TimeSpan.FromSeconds(30))
+            while (stopwatch.ElapsedMilliseconds < PollTimeoutMs)
             {
                 try
                 {
@@ -844,10 +1331,10 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                         stopwatch.ElapsedMilliseconds, e.Message);
                 }
 
-                await Task.Delay(1000);
+                await Task.Delay(PollIntervalMs);
             }
 
-            _logger.LogWarning("GetCertificateOnTimerAsync: timed out after 30s for tracking ID='{Id}'", id ?? "(null)");
+            _logger.LogWarning("GetCertificateOnTimerAsync: timed out after {TimeoutMs}ms for tracking ID='{Id}'", PollTimeoutMs, id ?? "(null)");
             return null;
         }
 
@@ -855,7 +1342,6 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
         {
             using var flow = new FlowLogger(_logger, $"GetSingleRecord({caRequestID ?? "null"})");
             _logger.MethodEntry();
-            _requestManager = new RequestManager();
             _logger.LogTrace("GetSingleRecord: caRequestID='{CaRequestId}'", caRequestID ?? "(null)");
 
             try
@@ -868,7 +1354,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                         throw new ArgumentException($"caRequestID '{caRequestID}' is too short ({caRequestID.Length} chars) to extract a UUID.", nameof(caRequestID));
                 });
 
-                var client = new HydrantIdClient(Config);
+                var client = ClientFactory(Config);
                 var certId = caRequestID.Substring(0, 36);
                 _logger.LogTrace("GetSingleRecord: extracted UUID='{CertId}'", certId);
 

@@ -1,0 +1,290 @@
+{
+  "info": {
+    "name": "HydrantID ACM API - Plugin Flow Replica",
+    "description": "Replicates, one request per HydrantIdClient.cs method, every HTTP call the HydrantCAProxy plugin makes against the HydrantID ACM v2 API. Folders are ordered to match a typical enrollment-with-DCV flow: connectivity check -> list policies -> domain validation -> submit CSR -> poll/retrieve certificate -> revoke/renew.\n\nEach request's description names the HydrantIdClient method and file:line it mirrors, so a failing step here maps directly to the corresponding C# call.\n\nAuth: HydrantID uses Hawk (see swagger info block). This collection sets Hawk auth at the collection level using {{hawkAuthId}} / {{hawkAuthKey}} -- fill those in via an environment, never commit real values.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "hawk",
+    "hawk": [
+      { "key": "authId", "value": "{{hawkAuthId}}", "type": "string" },
+      { "key": "authKey", "value": "{{hawkAuthKey}}", "type": "string" },
+      { "key": "algorithm", "value": "sha256", "type": "string" }
+    ]
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "https://acm-stage.hydrantid.com", "type": "string" },
+    { "key": "hawkAuthId", "value": "", "type": "string" },
+    { "key": "hawkAuthKey", "value": "", "type": "string" },
+    { "key": "policyId", "value": "", "type": "string" },
+    { "key": "validatorId", "value": "", "type": "string" },
+    { "key": "domainName", "value": "example.com", "type": "string" },
+    { "key": "domainId", "value": "", "type": "string" },
+    { "key": "csr", "value": "-----BEGIN CERTIFICATE REQUEST-----\nPASTE CSR HERE\n-----END CERTIFICATE REQUEST-----", "type": "string" },
+    { "key": "csrTrackingId", "value": "", "type": "string" },
+    { "key": "certificateId", "value": "", "type": "string" },
+    { "key": "orgName", "value": "", "type": "string" },
+    { "key": "orgPrimaryContactFullName", "value": "", "type": "string" },
+    { "key": "orgStreetAddress", "value": "", "type": "string" },
+    { "key": "orgCityProvPostalCodeCountry", "value": "", "type": "string" },
+    { "key": "emailAddress", "value": "", "type": "string" },
+    { "key": "phoneNumber", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "00 - Connectivity",
+      "item": [
+        {
+          "name": "Ping (GET /policies)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v2/policies",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v2", "policies"]
+            },
+            "description": "Mirrors HydrantIdClient.Ping() (HydrantCAProxy/Client/HydrantIdClient.cs:623-653). The plugin uses this exact call -- GET /api/v2/policies and check for 2xx -- as its config-page \"Test Connection\" health check. Any Hawk auth or connectivity issue will surface here first."
+          }
+        }
+      ]
+    },
+    {
+      "name": "01 - Policies",
+      "item": [
+        {
+          "name": "List Policies",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v2/policies",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v2", "policies"]
+            },
+            "description": "Mirrors HydrantIdClient.GetPolicyList() (HydrantCAProxy/Client/HydrantIdClient.cs:197-237). Deserializes into List<Policy>. Use this response to find the policy you want to test (note its id, and Details.Validator if present) and copy those into the {{policyId}} / {{validatorId}} collection variables.\n\nNote: the plugin's Policy/PolicyDetails models do not currently deserialize a policyType/CA-type field (e.g. IDENTRUST vs EJBCA) even though the HydrantID swagger defines PolicyType -- compare the raw JSON here against components.schemas.Policy in the swagger if you're chasing the Identrust support gap."
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 - Domain Validation (DCV)",
+      "item": [
+        {
+          "name": "List Domain Validators",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v2/domains/validators",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v2", "domains", "validators"]
+            },
+            "description": "Not called anywhere by the plugin (HydrantIdClient.cs has no method for it), but documented in the HydrantID swagger as GET /api/v2/domains/validators, returning available Validator objects (id, name, capabilities). Use this to find a real validator id to put in {{validatorId}} before running 'Create Domain Validation' below -- the plugin only ever uses whatever id happens to already be set on Policy.details.validator, so if no policy has one configured yet, this is how you discover what ids exist to configure one."
+          }
+        },
+        {
+          "name": "List Domains",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v2/domains/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v2", "domains", ""]
+            },
+            "description": "Mirrors HydrantIdClient.GetDomainListAsync() (HydrantCAProxy/Client/HydrantIdClient.cs:241-281). Called at the top of EnsureDomainsValidatedAsync (HydrantIdCAPlugin.cs:807) to find any previously-started validation for a domain by name (case-insensitive), since the plugin keeps no local state between Enroll() calls.\n\nCheck each item's status and domainValidUntil/codeValidUntil fields here -- those expiry fields are currently modeled (Domain.cs) but never read by plugin logic, which is the gap behind the 200-day Identrust re-validation question."
+          }
+        },
+        {
+          "name": "Create Domain Validation",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v2/domains/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v2", "domains", ""]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"domain\": \"{{domainName}}\",\n  \"validator\": \"{{validatorId}}\",\n  \"method\": \"DNS\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Mirrors HydrantIdClient.GetSubmitCreateDomainValidationAsync() (HydrantCAProxy/Client/HydrantIdClient.cs:285-326), fed by RequestManager.GetCreateDomainValidationRequest() (RequestManager.cs:372-401) which always hardcodes method=DNS and intentionally omits accountId (Hawk auth already scopes the account).\n\nUsed by EnsureDomainsValidatedAsync (HydrantIdCAPlugin.cs:817-821) when List Domains found no existing match for the target domain. Response is a Domain with status/code/codeInstructions -- publish the returned DNS record, then use \"Check Domain Validation\" below to poll.\n\nNOTE: this body matches exactly what the plugin sends today -- no payload field. Against validator=IdenTrust this is expected to fail/be incomplete, since IdenTrust's requiredPayload (see 'List Domain Validators') demands org/contact info the plugin never collects or sends. Use 'Create Domain Validation (IdenTrust, with payload)' below to test with that payload included."
+          }
+        },
+        {
+          "name": "Create Domain Validation (IdenTrust, with payload)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v2/domains/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v2", "domains", ""]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"domain\": \"{{domainName}}\",\n  \"validator\": \"IdenTrust\",\n  \"method\": \"DNS\",\n  \"payload\": {\n    \"orgName\": \"{{orgName}}\",\n    \"orgPrimaryContactFullName\": \"{{orgPrimaryContactFullName}}\",\n    \"orgStreetAddress\": \"{{orgStreetAddress}}\",\n    \"orgCityProvPostalCodeCountry\": \"{{orgCityProvPostalCodeCountry}}\",\n    \"emailAddress\": \"{{emailAddress}}\",\n    \"phoneNumber\": \"{{phoneNumber}}\"\n  }\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Not something the plugin can send today -- CreateDomainValidationPayload.Payload (CreateDomainValidationPayload.cs:30-31) exists in the model but RequestManager.GetCreateDomainValidationRequest() never populates it. This request manually includes the requiredPayload fields IdenTrust's validator listed under GET /api/v2/domains/validators (orgName, orgPrimaryContactFullName, orgStreetAddress, orgCityProvPostalCodeCountry, emailAddress, phoneNumber) so you can confirm whether HydrantID actually requires/accepts them for IdenTrust DCV before we add payload-building logic to the plugin.\n\nFill in orgName/orgPrimaryContactFullName/orgStreetAddress/orgCityProvPostalCodeCountry/emailAddress/phoneNumber as collection variables with real org details for this account."
+          }
+        },
+        {
+          "name": "Check Domain Validation",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v2/domains/{{domainId}}/validate",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v2", "domains", "{{domainId}}", "validate"]
+            },
+            "description": "Mirrors HydrantIdClient.GetSubmitCheckDomainValidationAsync() (HydrantCAProxy/Client/HydrantIdClient.cs:330-368). Called from EnsureDomainsValidatedAsync (HydrantIdCAPlugin.cs:822-825) whenever an existing domain match's status != VALIDATED -- today that includes EXPIRED, which re-checks a stale validation id rather than creating a new one. Use {{domainId}} from the id returned by List Domains or Create Domain Validation."
+          }
+        },
+        {
+          "name": "Delete Domain",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v2/domains/{{domainId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v2", "domains", "{{domainId}}"]
+            },
+            "description": "Documented in the HydrantID swagger (DELETE /api/v2/domains/{id} -> DeleteDomainResponse{id, success}) but never called by the plugin -- HydrantIdClient.cs has no method for it. Useful for repeat-testing DCV: after you've validated (or abandoned) a domain and are done with it, delete its record here so you can re-run 'Create Domain Validation' for the exact same domain string again from scratch, instead of needing to buy/register a new domain for every test cycle."
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 - Certificate Requests (Enroll)",
+      "item": [
+        {
+          "name": "Submit CSR",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v2/csr",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v2", "csr"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"policy\": \"{{policyId}}\",\n  \"csr\": \"{{csr}}\",\n  \"validity\": {\n    \"years\": 1\n  },\n  \"dnComponents\": {}\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Mirrors HydrantIdClient.GetSubmitEnrollmentAsync() (HydrantCAProxy/Client/HydrantIdClient.cs:85-136), body built by RequestManager.GetEnrollmentRequest() (RequestManager.cs:191-227) which fills dnComponents from the CSR itself and validity from the Command certificate template's ValidityPeriod/ValidityUnits annotation.\n\nIn the real plugin flow, this call only happens after EnsureDomainsValidatedForPolicyAsync (HydrantIdCAPlugin.cs:766-795) returns null (i.e. DCV skipped because Details.Validator is unset, or all target domains already VALIDATED) -- run '02 - Domain Validation' first if the policy has a validator configured. Response deserializes to CertRequestStatus; note its certificateId if issuanceStatus is ISSUED, otherwise its id is the CSR tracking id."
+          }
+        },
+        {
+          "name": "Get Certificate by CSR Tracking Id",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v2/csr/{{csrTrackingId}}/certificate",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v2", "csr", "{{csrTrackingId}}", "certificate"]
+            },
+            "description": "Mirrors HydrantIdClient.GetSubmitGetCertificateByCsrAsync() (HydrantCAProxy/Client/HydrantIdClient.cs:411-449).\n\nFlag: the HydrantID swagger only documents GET /api/v2/csr/{certRequestId}/status (returning CertRequestStatus with a certificateId once ISSUED) -- it does NOT document a /csr/{id}/certificate path. If this request 404s against real HydrantID, the plugin may be calling an endpoint that doesn't exist in the current API version; worth confirming with HydrantID or checking whether this should instead be GET /csr/{id}/status followed by GET /certificates/{certificateId}."
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 - Certificates",
+      "item": [
+        {
+          "name": "Get Certificate",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v2/certificates/{{certificateId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v2", "certificates", "{{certificateId}}"]
+            },
+            "description": "Mirrors HydrantIdClient.GetSubmitGetCertificateAsync() (HydrantCAProxy/Client/HydrantIdClient.cs:372-408), used to retrieve the issued certificate (including PEM) once issuanceStatus is ISSUED."
+          }
+        },
+        {
+          "name": "List Certificates (paged)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v2/certificates",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v2", "certificates"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"limit\": 100,\n  \"offset\": 0,\n  \"status\": \"VALID\",\n  \"expired\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Mirrors HydrantIdClient.GetSubmitCertificateListRequestAsync() (HydrantCAProxy/Client/HydrantIdClient.cs:498-621), used by the plugin's sync job to page through all certificates (100 per page) into a BlockingCollection. RequestManager.GetCertificatesListRequest() (RequestManager.cs:170-189) always sets status=0 (VALID) and expired=true; increment offset by 100 and re-run to fetch the next page, same as the plugin's do/while loop."
+          }
+        },
+        {
+          "name": "Revoke Certificate",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v2/certificates/{{certificateId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v2", "certificates", "{{certificateId}}"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"0\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Mirrors HydrantIdClient.GetSubmitRevokeCertificateAsync() (HydrantCAProxy/Client/HydrantIdClient.cs:451-495), body from RequestManager.GetRevokeRequest() (RequestManager.cs:152-168). RevocationReasons serializes as a string of the numeric code (StringEnumConverter + EnumMember) -- valid values are \"0\" (Unspecified), \"1\" (KeyCompromise), \"3\" (AffiliationChanged), \"4\" (Superseded), \"5\" (CessationOfOperation). Destructive against a real certificate -- use a disposable test cert on staging."
+          }
+        },
+        {
+          "name": "Renew Certificate",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v2/certificates/{{certificateId}}/renew",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v2", "certificates", "{{certificateId}}", "renew"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reuseCsr\": false,\n  \"csr\": \"{{csr}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "description": "Mirrors HydrantIdClient.GetSubmitRenewalAsync() (HydrantCAProxy/Client/HydrantIdClient.cs:139-193), body from RequestManager.GetRenewalRequest() (RequestManager.cs:230-251). Set reuseCsr=true and omit csr to test the renewCanReuseCSR policy path instead."
+          }
+        }
+      ]
+    }
+  ]
+}
