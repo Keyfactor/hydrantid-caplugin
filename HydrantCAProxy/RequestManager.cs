@@ -369,13 +369,14 @@ namespace Keyfactor.HydrantId
         }
 
         public CreateDomainValidationPayload GetCreateDomainValidationRequest(
-            string domain, string validatorId, string accountId = null, DomainValidationOrgPayload orgPayload = null)
+            string domain, string validatorId, string accountId = null, DomainValidationOrgPayload orgPayload = null,
+            string organizationIds = null)
         {
             try
             {
                 Log.MethodEntry();
-                Log.LogTrace("GetCreateDomainValidationRequest: domain='{Domain}', validatorId='{ValidatorId}', accountId='{AccountId}', orgPayload is {OrgPayloadNull}",
-                    domain ?? "(null)", validatorId ?? "(null)", accountId ?? "(null)", orgPayload == null ? "NULL" : "present");
+                Log.LogTrace("GetCreateDomainValidationRequest: domain='{Domain}', validatorId='{ValidatorId}', accountId='{AccountId}', organizationIds='{OrganizationIds}', orgPayload is {OrgPayloadNull}",
+                    domain ?? "(null)", validatorId ?? "(null)", accountId ?? "(null)", organizationIds ?? "(null)", orgPayload == null ? "NULL" : "present");
 
                 if (string.IsNullOrEmpty(domain))
                     throw new ArgumentNullException(nameof(domain), "domain cannot be null or empty.");
@@ -391,6 +392,11 @@ namespace Keyfactor.HydrantId
                     // already scoping the account -- omitted (not just blank) when not configured,
                     // since CreateDomainValidationPayload.AccountId ignores null on serialization.
                     AccountId = string.IsNullOrEmpty(accountId) ? null : accountId,
+                    // Associates the domain with the organization the enrolling policy issues
+                    // under. Without it HydrantId stores the domain with a null organizationIds and
+                    // POST /csr later refuses to issue against it. Omitted when the policy reports
+                    // no organization.
+                    OrganizationIds = string.IsNullOrEmpty(organizationIds) ? null : organizationIds,
                     // Some validators (e.g. IdenTrust) additionally require organization/contact
                     // details in "payload" -- omitted entirely when the caller has none configured.
                     Payload = orgPayload

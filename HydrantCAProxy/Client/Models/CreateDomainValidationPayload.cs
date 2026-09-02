@@ -24,6 +24,14 @@ namespace Keyfactor.HydrantId.Client.Models
         [JsonProperty("validator", NullValueHandling = NullValueHandling.Ignore)]
         public string Validator { get;set; }
 
+        // The organization the domain should be associated with, taken from the enrolling
+        // policy's organizationId. HydrantID policies issue under an organization and
+        // POST /api/v2/csr rejects an enrollment whose domains are not associated with it
+        // ("No valid domains associated with organization for <validator> policy"), so this
+        // has to be supplied when the validation record is created.
+        [JsonProperty("organizationIds", NullValueHandling = NullValueHandling.Ignore)]
+        public string OrganizationIds { get;set; }
+
         [JsonProperty("method", NullValueHandling = NullValueHandling.Ignore)]
         public ValidationMethod? Method { get;set; }
 

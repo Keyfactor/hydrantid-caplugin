@@ -16,6 +16,7 @@ namespace Keyfactor.HydrantId.Interfaces
         string AccountId { get;set; }
         string DomainName { get;set; }
         string Validator { get;set; }
+        string OrganizationIds { get;set; }
         ValidationMethod? Method { get;set; }
         object Payload { get;set; }
     }

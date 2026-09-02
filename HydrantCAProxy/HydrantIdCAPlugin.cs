@@ -846,7 +846,8 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             string pendingMessage = null;
             await flow.StepAsync("EnsureDomainsValidated", async () =>
             {
-                (allValidated, pendingMessage) = await EnsureDomainsValidatedAsync(client, flow, domainsToValidate, validatorId);
+                (allValidated, pendingMessage) = await EnsureDomainsValidatedAsync(
+                    client, flow, domainsToValidate, validatorId, policyId.OrganizationId?.ToString());
             });
 
             if (allValidated)
@@ -920,7 +921,8 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
         /// previously-started validation's id across Enroll() calls.
         /// </summary>
         internal async Task<(bool AllValidated, string PendingMessage)> EnsureDomainsValidatedAsync(
-            IHydrantIdClient client, FlowLogger flow, List<string> domainsToValidate, string validatorId)
+            IHydrantIdClient client, FlowLogger flow, List<string> domainsToValidate, string validatorId,
+            string organizationIds = null)
         {
             // HydrantID soft-deletes domain records rather than removing them, and it is not
             // established whether the list endpoint filters them out. A soft-deleted record must
@@ -957,7 +959,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                     }
 
                     var (domain, target, targetError) =
-                        await ResolveDomainValidationRecordAsync(client, flow, domainName, existingDomains, validatorId);
+                        await ResolveDomainValidationRecordAsync(client, flow, domainName, existingDomains, validatorId, organizationIds);
 
                     if (domain == null)
                     {
@@ -1040,7 +1042,8 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
         /// was rejected.
         /// </returns>
         internal async Task<(Domain Domain, string Target, string Error)> ResolveDomainValidationRecordAsync(
-            IHydrantIdClient client, FlowLogger flow, string domainName, List<Domain> existingDomains, string validatorId)
+            IHydrantIdClient client, FlowLogger flow, string domainName, List<Domain> existingDomains, string validatorId,
+            string organizationIds = null)
         {
             var targets = GetValidationTargets(domainName);
             string lastError = null;
@@ -1066,7 +1069,8 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                         // domain name (does not create a duplicate record) against staging.
                         flow.Step("DomainValidation.CreateOrRegenerate",
                             $"domain='{target}', for='{domainName}', priorStatus={(match == null ? "(none)" : match.Status.ToString())}");
-                        var payload = _requestManager.GetCreateDomainValidationRequest(target, validatorId, _config?.HydrantIdAccountId, BuildOrgPayload());
+                        var payload = _requestManager.GetCreateDomainValidationRequest(
+                            target, validatorId, _config?.HydrantIdAccountId, BuildOrgPayload(), organizationIds);
                         domain = await client.GetSubmitCreateDomainValidationAsync(payload);
                     }
                     else

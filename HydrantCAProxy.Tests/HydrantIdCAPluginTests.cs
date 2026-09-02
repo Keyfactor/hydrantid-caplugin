@@ -952,6 +952,116 @@ namespace HydrantCAProxy.Tests
         }
 
         // ---------------------------------------------------------------------
+        // Organization association on domain validation creation
+        // ---------------------------------------------------------------------
+
+        [Fact]
+        public async Task EnsureDomainsValidatedAsync_OrganizationIdSupplied_IsSentOnCreate()
+        {
+            var plugin = new HydrantIdCAPlugin();
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>());
+            CreateDomainValidationPayload captured = null;
+            mockClient.Setup(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()))
+                .Callback<CreateDomainValidationPayload>(pl => captured = pl)
+                .ReturnsAsync(new Domain { Id = "d1", Status = DomainStatusEnum.Validated });
+
+            await plugin.EnsureDomainsValidatedAsync(mockClient.Object, NewFlow(),
+                new List<string> { "orgid-example.com" }, "IdenTrust", "b9bc825f-09d7-4736-8938-fb541822234a");
+
+            Assert.Equal("b9bc825f-09d7-4736-8938-fb541822234a", captured.OrganizationIds);
+        }
+
+        [Fact]
+        public async Task EnsureDomainsValidatedAsync_NoOrganizationId_OmitsItFromTheCreate()
+        {
+            var plugin = new HydrantIdCAPlugin();
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>());
+            CreateDomainValidationPayload captured = null;
+            mockClient.Setup(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()))
+                .Callback<CreateDomainValidationPayload>(pl => captured = pl)
+                .ReturnsAsync(new Domain { Id = "d1", Status = DomainStatusEnum.Validated });
+
+            await plugin.EnsureDomainsValidatedAsync(mockClient.Object, NewFlow(),
+                new List<string> { "orgid-example.com" }, "IdenTrust");
+
+            // Null rather than empty, so NullValueHandling.Ignore drops it from the JSON entirely.
+            Assert.Null(captured.OrganizationIds);
+        }
+
+        [Fact]
+        public void GetCreateDomainValidationRequest_BlankOrganizationIds_SerializesWithoutTheProperty()
+        {
+            var payload = new RequestManager().GetCreateDomainValidationRequest(
+                "example.com", "IdenTrust", null, null, "");
+
+            var json = Newtonsoft.Json.JsonConvert.SerializeObject(payload);
+
+            Assert.DoesNotContain("organizationIds", json);
+        }
+
+        [Fact]
+        public void GetCreateDomainValidationRequest_OrganizationIds_SerializesAsOrganizationIds()
+        {
+            var payload = new RequestManager().GetCreateDomainValidationRequest(
+                "example.com", "IdenTrust", null, null, "b9bc825f-09d7-4736-8938-fb541822234a");
+
+            var json = Newtonsoft.Json.JsonConvert.SerializeObject(payload);
+
+            Assert.Contains("\"organizationIds\":\"b9bc825f-09d7-4736-8938-fb541822234a\"", json);
+        }
+
+        [Fact]
+        public async Task EnsureDomainsValidatedForPolicyAsync_PassesThePolicysOrganizationIdThrough()
+        {
+            var organizationId = Guid.Parse("b9bc825f-09d7-4736-8938-fb541822234a");
+            var plugin = new HydrantIdCAPlugin();
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>());
+            CreateDomainValidationPayload captured = null;
+            mockClient.Setup(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()))
+                .Callback<CreateDomainValidationPayload>(pl => captured = pl)
+                .ReturnsAsync(new Domain { Id = "d1", Status = DomainStatusEnum.Validated });
+            var policy = new Policy
+            {
+                Id = Guid.NewGuid(),
+                Name = "Keyfactor IdenTrust TLS OV",
+                OrganizationId = organizationId,
+                Details = new PolicyDetails { Validator = "IdenTrust" }
+            };
+
+            var result = await plugin.EnsureDomainsValidatedForPolicyAsync(mockClient.Object, NewFlow(), policy, SampleCsr, null);
+
+            // The organization the policy issues under is the one the domain must be linked to.
+            Assert.Null(result);
+            Assert.Equal(organizationId.ToString(), captured.OrganizationIds);
+        }
+
+        [Fact]
+        public async Task EnsureDomainsValidatedForPolicyAsync_PolicyWithoutOrganizationId_SendsNone()
+        {
+            var plugin = new HydrantIdCAPlugin();
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>());
+            CreateDomainValidationPayload captured = null;
+            mockClient.Setup(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()))
+                .Callback<CreateDomainValidationPayload>(pl => captured = pl)
+                .ReturnsAsync(new Domain { Id = "d1", Status = DomainStatusEnum.Validated });
+            var policy = new Policy
+            {
+                Id = Guid.NewGuid(),
+                Name = "P",
+                OrganizationId = null,
+                Details = new PolicyDetails { Validator = "PrivateCA" }
+            };
+
+            await plugin.EnsureDomainsValidatedForPolicyAsync(mockClient.Object, NewFlow(), policy, SampleCsr, null);
+
+            Assert.Null(captured.OrganizationIds);
+        }
+
+        // ---------------------------------------------------------------------
         // Organization link diagnostic
         // ---------------------------------------------------------------------
 
