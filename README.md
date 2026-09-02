@@ -210,6 +210,57 @@ The plugin supports the following standard CRL revocation reasons:
         | **HydrantIdOrgCityProvPostalCodeCountry** | Organization city/province/postal code/country, paired with HydrantIdOrgName. | No | `Anytown, OH 44131, US` |
         | **HydrantIdEmailAddress** | Organization contact email address, paired with HydrantIdOrgName. | No | `jane@acme.com` |
         | **HydrantIdPhoneNumber** | Organization contact phone number, paired with HydrantIdOrgName. | No | `+1-555-555-0100` |
+        | **DnsPropagationDelaySeconds** | Seconds to wait after a DNS provider plugin writes the validation TXT record before asking HydrantId to check it. Only used on the automated path; ignored when validation is done by hand. Set to `0` to start polling immediately. Defaults to `30` when blank. | No | `30` |
+        | **DomainValidationTimeoutSeconds** | Maximum seconds to hold the enrollment open while polling HydrantId for domain validation after a DNS provider plugin has staged the record. On timeout the enrollment falls back to external validation rather than failing. Defaults to `300` when blank. | No | `300` |
+        | **DomainValidationPollIntervalSeconds** | Seconds between HydrantId domain validation status checks while waiting for a staged record. Defaults to `10` when blank. | No | `10` |
+        
+        ### Automated Domain Validation (DNS Provider Plugins)
+        
+        When a policy has a `validator` configured, HydrantId requires domain control validation (DCV)
+        before it will issue. The plugin can complete DCV either automatically or by hand, and picks
+        per domain without any configuration switch.
+        
+        **Automated path.** If the AnyCA Gateway supplies an `IDomainValidatorFactory` and a DNS provider
+        plugin is deployed and configured for the zone that owns the domain, a single enrollment does all
+        of the following without operator involvement:
+        
+        1. Creates (or re-checks) the HydrantId domain validation record to obtain its TXT code.
+        2. Asks the resolved DNS provider plugin to write that record. The record name is **the domain
+           itself** — not an `_acme-challenge` subdomain, as in ACME — and the value is HydrantId's whole
+           code string, e.g. `identrust_validate=1kiQrHax...`, matching the `codeInstructions` HydrantId
+           returns.
+        3. Waits `DnsPropagationDelaySeconds`, then polls HydrantId every
+           `DomainValidationPollIntervalSeconds` until the domain reports `VALIDATED`, up to
+           `DomainValidationTimeoutSeconds`.
+        4. Deletes the TXT record it wrote, whether or not validation succeeded. HydrantId's DCV remains
+           valid until `domainValidUntil` (roughly six months for IdenTrust), so no record needs to stay
+           in the zone.
+        5. Submits the CSR and waits for the certificate, returning the issued certificate from the same
+           enrollment call.
+        
+        A cleanup failure is logged but never fails an enrollment that otherwise succeeded — a leftover
+        TXT record cannot block issuance.
+        
+        **Manual fallback.** Any domain that cannot be automated falls back to the previous behaviour:
+        the enrollment returns an external-validation status carrying the TXT record to publish, and the
+        operator resubmits once it is live. This happens when:
+        
+        - the Gateway supplies no `IDomainValidatorFactory`;
+        - no DNS provider plugin is configured for that domain's zone;
+        - the DNS provider plugin fails or throws while writing the record;
+        - HydrantId returns no validation code; or
+        - validation is still pending when `DomainValidationTimeoutSeconds` runs out.
+        
+        Because the fallback is per domain, a certificate with some domains in an automated zone and
+        others outside it still makes progress on the automated ones.
+        
+        Domains that are already `VALIDATED`, or covered by an already-validated parent domain, skip DCV
+        entirely and never touch a DNS provider plugin.
+        
+        > **Note on validation type.** DNS provider plugins are resolved with a validation type of
+        > `dns-01` first, then `DNS`. The reference ACME CA plugin resolves with `dns-01` at runtime while
+        > that project's DNS plugin documentation describes `GetValidationType()` as returning `DNS`, so
+        > both spellings are attempted rather than silently missing a plugin that is deployed.
         
         ### Gateway Registration Notes
         
@@ -242,6 +293,7 @@ The plugin supports the following standard CRL revocation reasons:
         * **HydrantIdAuthKey** - The API Authentication Key (secret) provided by HydrantId for API access.
         * **HydrantIdAccountId** - Optional. Required by some HydrantId tenants for domain validation to succeed; see the table above.
         * **HydrantIdOrgName**, **HydrantIdOrgPrimaryContactFullName**, **HydrantIdOrgStreetAddress**, **HydrantIdOrgCityProvPostalCodeCountry**, **HydrantIdEmailAddress**, **HydrantIdPhoneNumber** - Optional. Required by some domain validators (e.g. IdenTrust); see the table above.
+        * **DnsPropagationDelaySeconds**, **DomainValidationTimeoutSeconds**, **DomainValidationPollIntervalSeconds** - Optional timing controls for automated domain validation; see [Automated Domain Validation](#automated-domain-validation-dns-provider-plugins). Leave blank to use the defaults.
         
         2. **Certificate Template Configuration**
         
@@ -267,6 +319,16 @@ The plugin supports the following standard CRL revocation reasons:
         * **HydrantIdBaseUrl** - The Base URL For the HydrantId Endpoint similar to https://acm-stage.hydrantid.com.  Get this from HydrantId.
         * **HydrantIdAuthId** - The AuthId Obtained from HydrantId.
         * **HydrantIdAuthKey** - The AuthKey Obtained from HydrantId.
+        * **HydrantIdAccountId** - Optional. Some HydrantId tenants require the account id to be included when creating a domain validation request (POST /domains/); leave blank if domain validation already works without it. Obtain from the HydrantId portal's account settings, HydrantId support, or the 'account.id' field on any existing certificate returned by the API.
+        * **HydrantIdOrgName** - Optional. Organization name required by some HydrantId validators (e.g. IdenTrust) on domain validation requests. Leave blank if not required by your validator -- omitted from the request entirely when blank.
+        * **HydrantIdOrgPrimaryContactFullName** - Optional. Organization primary contact full name required by some HydrantId validators (e.g. IdenTrust) on domain validation requests.
+        * **HydrantIdOrgStreetAddress** - Optional. Organization street address required by some HydrantId validators (e.g. IdenTrust) on domain validation requests.
+        * **HydrantIdOrgCityProvPostalCodeCountry** - Optional. Organization city/province/postal code/country required by some HydrantId validators (e.g. IdenTrust) on domain validation requests.
+        * **HydrantIdEmailAddress** - Optional. Organization contact email address required by some HydrantId validators (e.g. IdenTrust) on domain validation requests.
+        * **HydrantIdPhoneNumber** - Optional. Organization contact phone number required by some HydrantId validators (e.g. IdenTrust) on domain validation requests.
+        * **DnsPropagationDelaySeconds** - Seconds to wait after a DNS provider plugin writes the validation TXT record before asking HydrantId to check it, allowing the record to propagate to the authoritative nameservers. Only used when a DNS provider plugin is handling the record; ignored on the manual validation path. Set to 0 to skip the delay and start polling immediately.
+        * **DomainValidationTimeoutSeconds** - Maximum seconds to hold the enrollment open while polling HydrantId for domain validation to complete after a DNS provider plugin has staged the TXT record. On timeout the enrollment falls back to external validation (manual DNS publish and resubmit) rather than failing.
+        * **DomainValidationPollIntervalSeconds** - Seconds between HydrantId domain validation status checks while waiting for a staged DNS record to be validated.
         * **Enabled** - Flag to Enable or Disable the CA connector.
 
 2. ### Template (Product) Configuration
@@ -353,6 +415,12 @@ Confirm via the policy list that `details.validator` is unset for the policy und
 | C4b | Enroll for a subdomain of a still-pending (not yet validated) parent | Same as C4, but the parent domain's own validation is still `Pending` | Creates its own separate validation record for the subdomain (parent coverage only applies once the parent is actually `Validated`) |
 | C5 | Never publish the TXT record | Same as C1 but don't publish the record, resubmit later | Stays pending; status message still shows the same/valid instructions, doesn't error |
 | C6 | Domain validation expires mid-lifecycle (IdenTrust ~200 days) | Not practically testable end-to-end in a short QA pass — mark "not testable this cycle" unless a naturally-expired domain is available in the environment | Enrollment restarts DCV rather than getting stuck on a dead validation record |
+| C7 | Automated DCV, happy path | Deploy and configure a DNS provider plugin for a zone you control, then enroll for a never-validated domain in that zone | Certificate issues from the single enrollment with no operator step; the TXT record appears in the zone during validation and is gone afterwards |
+| C8 | Automated DCV, cleanup verified | After C7, list TXT records for the domain at the DNS provider | No `*_validate=` record remains; HydrantId still shows the domain `VALIDATED` with a future `domainValidUntil` |
+| C9 | Automated DCV times out | Set `DomainValidationTimeoutSeconds` to a low value (e.g. `15`) and enroll for a domain in a zone whose validation is slow, or point the plugin at a zone HydrantId cannot resolve | Enrollment returns external-validation with TXT instructions rather than failing; the staged record is cleaned up |
+| C10 | DNS provider plugin misconfigured | Configure the DNS provider plugin with a bad credential, then enroll | Enrollment falls back to external validation with TXT instructions; Gateway log records the plugin's staging error; enrollment does not fail outright |
+| C11 | Mixed zones on one certificate | Enroll for a CN in an automated zone plus a SAN in a zone with no DNS plugin | The automated domain validates; the un-automated one is reported in the external-validation message for manual publication |
+| C12 | No DNS plugin deployed at all | With no DNS provider plugin configured, repeat C1/C2 | Behaves exactly as C1/C2 did before automation existed |
 
 ### D. Renewal
 
@@ -398,7 +466,7 @@ Confirm via the policy list that `details.validator` is unset for the policy und
 | H2 | Enroll while CA is Disabled | Set CA `Enabled=false`, attempt enrollment | Fails/blocked consistent with disabled state |
 | H3 | Network/HydrantId outage simulated | Point `HydrantIdBaseUrl` at an unreachable host, attempt any operation | Fails with a clear connectivity error, not a hang |
 
-**Prerequisites for the C-series tests**: a domain you actually control DNS for, so you can publish the real TXT records HydrantId returns.
+**Prerequisites for the C-series tests**: a domain you actually control DNS for, so you can publish the real TXT records HydrantId returns. Tests C7–C11 additionally need a DNS provider plugin deployed to the Gateway and configured for that domain's zone.
 
 ## License
 
