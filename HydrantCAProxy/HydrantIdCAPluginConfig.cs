@@ -27,6 +27,16 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             public static string HydrantIdBaseUrl = "HydrantIdBaseUrl";
             public static string HydrantIdAuthId = "HydrantIdAuthId";
             public static string HydrantIdAuthKey = "HydrantIdAuthKey";
+            public static string HydrantIdAccountId = "HydrantIdAccountId";
+            public static string HydrantIdOrgName = "HydrantIdOrgName";
+            public static string HydrantIdOrgPrimaryContactFullName = "HydrantIdOrgPrimaryContactFullName";
+            public static string HydrantIdOrgStreetAddress = "HydrantIdOrgStreetAddress";
+            public static string HydrantIdOrgCityProvPostalCodeCountry = "HydrantIdOrgCityProvPostalCodeCountry";
+            public static string HydrantIdEmailAddress = "HydrantIdEmailAddress";
+            public static string HydrantIdPhoneNumber = "HydrantIdPhoneNumber";
+            public static string DnsPropagationDelaySeconds = "DnsPropagationDelaySeconds";
+            public static string DomainValidationTimeoutSeconds = "DomainValidationTimeoutSeconds";
+            public static string DomainValidationPollIntervalSeconds = "DomainValidationPollIntervalSeconds";
             public static string DefaultPageSize = "DefaultPageSize";
             public static string Enabled = "Enabled";
         }
@@ -36,6 +46,18 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             public string HydrantIdBaseUrl { get; set; }
             public string HydrantIdAuthId { get; set; }
             public string HydrantIdAuthKey { get; set; }
+            public string HydrantIdAccountId { get; set; }
+            public string HydrantIdOrgName { get; set; }
+            public string HydrantIdOrgPrimaryContactFullName { get; set; }
+            public string HydrantIdOrgStreetAddress { get; set; }
+            public string HydrantIdOrgCityProvPostalCodeCountry { get; set; }
+            public string HydrantIdEmailAddress { get; set; }
+            public string HydrantIdPhoneNumber { get; set; }
+            // Nullable so an absent connector field (null) stays distinguishable from an
+            // operator explicitly setting 0, which disables the propagation delay.
+            public int? DnsPropagationDelaySeconds { get; set; }
+            public int? DomainValidationTimeoutSeconds { get; set; }
+            public int? DomainValidationPollIntervalSeconds { get; set; }
             public bool Enabled { get; set; }
         }
 
@@ -70,6 +92,76 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                     Hidden = true,
                     DefaultValue = "",
                     Type = "Secret"
+                },
+                [ConfigConstants.HydrantIdAccountId] = new PropertyConfigInfo()
+                {
+                    Comments = "Optional. Some HydrantId tenants require the account id to be included when creating a domain validation request (POST /domains/); leave blank if domain validation already works without it. Obtain from the HydrantId portal's account settings, HydrantId support, or the 'account.id' field on any existing certificate returned by the API.",
+                    Hidden = false,
+                    DefaultValue = "",
+                    Type = "String"
+                },
+                [ConfigConstants.HydrantIdOrgName] = new PropertyConfigInfo()
+                {
+                    Comments = "Optional. Organization name required by some HydrantId validators (e.g. IdenTrust) on domain validation requests. Leave blank if not required by your validator -- omitted from the request entirely when blank.",
+                    Hidden = false,
+                    DefaultValue = "",
+                    Type = "String"
+                },
+                [ConfigConstants.HydrantIdOrgPrimaryContactFullName] = new PropertyConfigInfo()
+                {
+                    Comments = "Optional. Organization primary contact full name required by some HydrantId validators (e.g. IdenTrust) on domain validation requests.",
+                    Hidden = false,
+                    DefaultValue = "",
+                    Type = "String"
+                },
+                [ConfigConstants.HydrantIdOrgStreetAddress] = new PropertyConfigInfo()
+                {
+                    Comments = "Optional. Organization street address required by some HydrantId validators (e.g. IdenTrust) on domain validation requests.",
+                    Hidden = false,
+                    DefaultValue = "",
+                    Type = "String"
+                },
+                [ConfigConstants.HydrantIdOrgCityProvPostalCodeCountry] = new PropertyConfigInfo()
+                {
+                    Comments = "Optional. Organization city/province/postal code/country required by some HydrantId validators (e.g. IdenTrust) on domain validation requests.",
+                    Hidden = false,
+                    DefaultValue = "",
+                    Type = "String"
+                },
+                [ConfigConstants.HydrantIdEmailAddress] = new PropertyConfigInfo()
+                {
+                    Comments = "Optional. Organization contact email address required by some HydrantId validators (e.g. IdenTrust) on domain validation requests.",
+                    Hidden = false,
+                    DefaultValue = "",
+                    Type = "String"
+                },
+                [ConfigConstants.HydrantIdPhoneNumber] = new PropertyConfigInfo()
+                {
+                    Comments = "Optional. Organization contact phone number required by some HydrantId validators (e.g. IdenTrust) on domain validation requests.",
+                    Hidden = false,
+                    DefaultValue = "",
+                    Type = "String"
+                },
+                [ConfigConstants.DnsPropagationDelaySeconds] = new PropertyConfigInfo()
+                {
+                    Comments = "Seconds to wait after a DNS provider plugin writes the validation TXT record before asking HydrantId to check it, allowing the record to propagate to the authoritative nameservers. Only used when a DNS provider plugin is handling the record; ignored on the manual validation path. Set to 0 to skip the delay and start polling immediately.",
+                    Hidden = false,
+                    DefaultValue = 30,
+                    Type = "Number"
+                },
+                [ConfigConstants.DomainValidationTimeoutSeconds] = new PropertyConfigInfo()
+                {
+                    Comments = "Maximum seconds to hold the enrollment open while polling HydrantId for domain validation to complete after a DNS provider plugin has staged the TXT record. On timeout the enrollment falls back to external validation (manual DNS publish and resubmit) rather than failing.",
+                    Hidden = false,
+                    DefaultValue = 300,
+                    Type = "Number"
+                },
+                [ConfigConstants.DomainValidationPollIntervalSeconds] = new PropertyConfigInfo()
+                {
+                    Comments = "Seconds between HydrantId domain validation status checks while waiting for a staged DNS record to be validated.",
+                    Hidden = false,
+                    DefaultValue = 10,
+                    Type = "Number"
                 },
                 [ConfigConstants.Enabled] = new PropertyConfigInfo()
                 {

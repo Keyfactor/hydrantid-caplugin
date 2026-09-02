@@ -331,4 +331,5 @@ ASALocalRun/
 .claude/settings.local.json
 sample change.txt
 .claude/settings.json
+postman/*.postman_environment.local.json
 
