@@ -946,6 +946,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                     if (exactMatch?.Status == DomainStatusEnum.Validated)
                     {
                         flow.Step("DomainValidation.AlreadyValidated", $"domain='{domainName}'");
+                        ReportOrganizationLink(flow, exactMatch, domainName);
                         continue;
                     }
 
@@ -970,6 +971,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                     if (domain.Status == DomainStatusEnum.Validated)
                     {
                         flow.Step("DomainValidation.NowValidated", $"domain='{target}'");
+                        ReportOrganizationLink(flow, domain, target);
                         continue;
                     }
 
@@ -1329,9 +1331,14 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                     }
 
                     if (rechecked?.Status == DomainStatusEnum.Validated)
+                    {
                         flow.Step("DomainValidation.NowValidated", $"domain='{entry.Domain}' after {stopwatch.Elapsed.TotalSeconds:F0}s");
+                        ReportOrganizationLink(flow, rechecked, entry.Domain);
+                    }
                     else
+                    {
                         stillPending.Add(entry);
+                    }
                 }
 
                 remaining = stillPending;
@@ -1351,6 +1358,39 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                     $"still pending after {stopwatch.Elapsed.TotalSeconds:F0}s (budget {DomainValidationTimeoutSeconds}s)");
                 pending.Add((entry.Domain, entry.Instructions));
             }
+        }
+
+        /// <summary>
+        /// Records whether a validated HydrantID domain is linked to an organization.
+        ///
+        /// An IdenTrust OV policy issues under an organization, and POST /api/v2/csr rejects the
+        /// enrollment with "No valid domains associated with organization for IdenTrust policy" when
+        /// the domain it is issuing for has none. That link lives in the domain record's
+        /// organizationIds and is established by HydrantID, not by anything this plugin sends --
+        /// surfacing it at the moment validation completes turns an opaque downstream HTTP 500 into
+        /// an actionable log line. Purely diagnostic: it never changes the enrollment outcome,
+        /// because whether a given policy actually requires an organization is HydrantID's call.
+        /// </summary>
+        internal void ReportOrganizationLink(FlowLogger flow, Domain domain, string target)
+        {
+            if (domain == null)
+                return;
+
+            if (!string.IsNullOrWhiteSpace(domain.OrganizationIds))
+            {
+                flow.Step("DomainValidation.OrganizationLink",
+                    $"domain='{target}', organizationIds='{domain.OrganizationIds}'");
+                return;
+            }
+
+            flow.Step("DomainValidation.NoOrganizationLink", $"domain='{target}' has no organizationIds");
+            _logger.LogWarning(
+                "Domain '{Domain}' is VALIDATED at HydrantId but its organizationIds is empty. A policy that " +
+                "issues under an organization (e.g. an IdenTrust OV policy) will reject enrollment with " +
+                "\"No valid domains associated with organization\". This plugin cannot create that link -- " +
+                "confirm in the HydrantId portal that the domain is associated with a vetted organization, " +
+                "and that the organization matches the one the policy issues under.",
+                target);
         }
 
         /// <summary>

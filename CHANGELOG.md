@@ -4,6 +4,7 @@
 * Changed DNS provider plugin resolution to try the base domain and then the requested name, because the Gateway matches a domain validation configuration on exact domain equality; a configuration registered against either name now resolves, and the record is still written on the base domain
 * Changed the DNS provider validation type tried first from "dns-01" to "DNS", which is what deployed DNS plugins report to AnyCA Gateway 26.2; the other spelling is still attempted as a fallback
 * Added a fallback to the fully-qualified name when HydrantId will not accept the derived base domain, so an unrecognized multi-label public suffix costs one rejected API call rather than a failed enrollment
+* Added a diagnostic that reports a validated domain's organizationIds, warning when it is empty, so the opaque "No valid domains associated with organization" failure from POST /csr is visible at the point domain validation completes
 * Added per-domain fallback to external validation when automation is unavailable (no factory, no DNS plugin for the zone, staging failure, no validation code, or validation timeout), preserving the previous manual publish-and-resubmit behaviour
 * Added DnsPropagationDelaySeconds, DomainValidationTimeoutSeconds and DomainValidationPollIntervalSeconds CA connection settings
 * Added domain control validation for policies that declare a validator, including reuse of an already-validated parent domain for subdomains and regeneration of expired validation codes

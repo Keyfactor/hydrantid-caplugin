@@ -951,6 +951,57 @@ namespace HydrantCAProxy.Tests
             validator.Verify(v => v.CleanupValidation("keyfactorluadns.com", It.IsAny<CancellationToken>()), Times.Once);
         }
 
+        // ---------------------------------------------------------------------
+        // Organization link diagnostic
+        // ---------------------------------------------------------------------
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("   ")]
+        [InlineData("b9bc825f-09d7-4736-8938-fb541822234a")]
+        public void ReportOrganizationLink_NeverThrows_ForAnyOrganizationIdsValue(string organizationIds)
+        {
+            var plugin = new HydrantIdCAPlugin();
+
+            plugin.ReportOrganizationLink(NewFlow(),
+                new Domain { DomainName = "example.com", Status = DomainStatusEnum.Validated, OrganizationIds = organizationIds },
+                "example.com");
+        }
+
+        [Fact]
+        public void ReportOrganizationLink_NullDomain_IsIgnored()
+        {
+            var plugin = new HydrantIdCAPlugin();
+
+            plugin.ReportOrganizationLink(NewFlow(), null, "example.com");
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("b9bc825f-09d7-4736-8938-fb541822234a")]
+        public async Task EnsureDomainsValidatedAsync_OrganizationLinkDiagnostic_DoesNotChangeTheOutcome(string organizationIds)
+        {
+            // The diagnostic reports what HydrantId returned; whether a policy actually requires an
+            // organization is HydrantId's call, so a missing link must not fail validation here.
+            var plugin = new HydrantIdCAPlugin();
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetDomainListAsync()).ReturnsAsync(new List<Domain>());
+            mockClient.Setup(c => c.GetSubmitCreateDomainValidationAsync(It.IsAny<CreateDomainValidationPayload>()))
+                .ReturnsAsync(new Domain
+                {
+                    Id = "d1",
+                    Status = DomainStatusEnum.Validated,
+                    OrganizationIds = organizationIds
+                });
+
+            var result = await plugin.EnsureDomainsValidatedAsync(mockClient.Object, NewFlow(),
+                new List<string> { "orglink-example.com" }, "IdenTrust");
+
+            Assert.True(result.AllValidated);
+            Assert.Null(result.PendingMessage);
+        }
+
         [Fact]
         public void ResolveDnsValidator_NoFactorySupplied_ReturnsNull()
         {
