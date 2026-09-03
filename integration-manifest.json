@@ -26,6 +26,46 @@
                     "description": "The AuthKey Obtained from HydrantId."
                 },
                 {
+                    "name": "HydrantIdAccountId",
+                    "description": "Optional. Some HydrantId tenants require the account id to be included when creating a domain validation request (POST /domains/); leave blank if domain validation already works without it. Obtain from the HydrantId portal's account settings, HydrantId support, or the 'account.id' field on any existing certificate returned by the API."
+                },
+                {
+                    "name": "HydrantIdOrgName",
+                    "description": "Optional. Organization name required by some HydrantId validators (e.g. IdenTrust) on domain validation requests. Leave blank if not required by your validator -- omitted from the request entirely when blank."
+                },
+                {
+                    "name": "HydrantIdOrgPrimaryContactFullName",
+                    "description": "Optional. Organization primary contact full name required by some HydrantId validators (e.g. IdenTrust) on domain validation requests."
+                },
+                {
+                    "name": "HydrantIdOrgStreetAddress",
+                    "description": "Optional. Organization street address required by some HydrantId validators (e.g. IdenTrust) on domain validation requests."
+                },
+                {
+                    "name": "HydrantIdOrgCityProvPostalCodeCountry",
+                    "description": "Optional. Organization city/province/postal code/country required by some HydrantId validators (e.g. IdenTrust) on domain validation requests."
+                },
+                {
+                    "name": "HydrantIdEmailAddress",
+                    "description": "Optional. Organization contact email address required by some HydrantId validators (e.g. IdenTrust) on domain validation requests."
+                },
+                {
+                    "name": "HydrantIdPhoneNumber",
+                    "description": "Optional. Organization contact phone number required by some HydrantId validators (e.g. IdenTrust) on domain validation requests."
+                },
+                {
+                    "name": "DnsPropagationDelaySeconds",
+                    "description": "Seconds to wait after a DNS provider plugin writes the validation TXT record before asking HydrantId to check it, allowing the record to propagate to the authoritative nameservers. Only used when a DNS provider plugin is handling the record; ignored on the manual validation path. Set to 0 to skip the delay and start polling immediately."
+                },
+                {
+                    "name": "DomainValidationTimeoutSeconds",
+                    "description": "Maximum seconds to hold the enrollment open while polling HydrantId for domain validation to complete after a DNS provider plugin has staged the TXT record. On timeout the enrollment falls back to external validation (manual DNS publish and resubmit) rather than failing."
+                },
+                {
+                    "name": "DomainValidationPollIntervalSeconds",
+                    "description": "Seconds between HydrantId domain validation status checks while waiting for a staged DNS record to be validated."
+                },
+                {
                     "name": "Enabled",
                     "description": "Flag to Enable or Disable the CA connector."
                 }
