@@ -948,7 +948,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                     if (exactMatch?.Status == DomainStatusEnum.Validated)
                     {
                         flow.Step("DomainValidation.AlreadyValidated", $"domain='{domainName}'");
-                        ReportOrganizationLink(flow, exactMatch, domainName);
+                        await EnsureOrganizationLinkedAsync(client, flow, exactMatch, domainName, organizationIds);
                         continue;
                     }
 
@@ -973,7 +973,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                     if (domain.Status == DomainStatusEnum.Validated)
                     {
                         flow.Step("DomainValidation.NowValidated", $"domain='{target}'");
-                        ReportOrganizationLink(flow, domain, target);
+                        await EnsureOrganizationLinkedAsync(client, flow, domain, target, organizationIds);
                         continue;
                     }
 
@@ -1011,7 +1011,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
 
                     await flow.StepAsync("DomainValidation.AwaitValidation", async () =>
                     {
-                        await AwaitStagedValidationsAsync(client, flow, staged, pending);
+                        await AwaitStagedValidationsAsync(client, flow, staged, pending, organizationIds);
                     });
                 }
             }
@@ -1309,7 +1309,8 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
         /// can still pick it up.
         /// </summary>
         internal async Task AwaitStagedValidationsAsync(
-            IHydrantIdClient client, FlowLogger flow, List<StagedValidation> staged, List<(string Domain, string Instructions)> pending)
+            IHydrantIdClient client, FlowLogger flow, List<StagedValidation> staged, List<(string Domain, string Instructions)> pending,
+            string organizationIds = null)
         {
             var timeout = TimeSpan.FromSeconds(DomainValidationTimeoutSeconds);
             var interval = TimeSpan.FromSeconds(DomainValidationPollIntervalSeconds);
@@ -1337,7 +1338,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                     if (rechecked?.Status == DomainStatusEnum.Validated)
                     {
                         flow.Step("DomainValidation.NowValidated", $"domain='{entry.Domain}' after {stopwatch.Elapsed.TotalSeconds:F0}s");
-                        ReportOrganizationLink(flow, rechecked, entry.Domain);
+                        await EnsureOrganizationLinkedAsync(client, flow, rechecked, entry.Domain, organizationIds);
                     }
                     else
                     {
@@ -1365,36 +1366,67 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
         }
 
         /// <summary>
-        /// Records whether a validated HydrantID domain is linked to an organization.
+        /// Ensures a validated HydrantID domain is linked to the organization the enrolling policy
+        /// issues under, fixing the link when it is missing or wrong rather than only reporting it.
         ///
         /// An IdenTrust OV policy issues under an organization, and POST /api/v2/csr rejects the
         /// enrollment with "No valid domains associated with organization for IdenTrust policy" when
-        /// the domain it is issuing for has none. That link lives in the domain record's
-        /// organizationIds and is established by HydrantID, not by anything this plugin sends --
-        /// surfacing it at the moment validation completes turns an opaque downstream HTTP 500 into
-        /// an actionable log line. Purely diagnostic: it never changes the enrollment outcome,
-        /// because whether a given policy actually requires an organization is HydrantID's call.
+        /// the domain it is issuing for has none -- including a domain that was validated before
+        /// this plugin started sending organizationIds on creation, or one linked to a different
+        /// organization than the policy now in use. POST /api/v2/domains/{id} with just
+        /// {"organizationIds": "..."} updates that link on the existing record without disturbing
+        /// its validation status (confirmed against staging).
+        ///
+        /// Does nothing when <paramref name="organizationIds"/> is blank -- the matched policy
+        /// reports no organization, so there is nothing to link -- other than warning if the domain
+        /// also has no link, since a policy that turns out to require one will surface that at
+        /// enrollment time as "No valid domains associated with organization" instead.
         /// </summary>
-        internal void ReportOrganizationLink(FlowLogger flow, Domain domain, string target)
+        internal async Task EnsureOrganizationLinkedAsync(
+            IHydrantIdClient client, FlowLogger flow, Domain domain, string target, string organizationIds)
         {
             if (domain == null)
                 return;
 
-            if (!string.IsNullOrWhiteSpace(domain.OrganizationIds))
+            if (string.Equals(domain.OrganizationIds, organizationIds, StringComparison.OrdinalIgnoreCase))
             {
-                flow.Step("DomainValidation.OrganizationLink",
-                    $"domain='{target}', organizationIds='{domain.OrganizationIds}'");
+                if (!string.IsNullOrWhiteSpace(domain.OrganizationIds))
+                {
+                    flow.Step("DomainValidation.OrganizationLink",
+                        $"domain='{target}', organizationIds='{domain.OrganizationIds}'");
+                }
                 return;
             }
 
-            flow.Step("DomainValidation.NoOrganizationLink", $"domain='{target}' has no organizationIds");
-            _logger.LogWarning(
-                "Domain '{Domain}' is VALIDATED at HydrantId but its organizationIds is empty. A policy that " +
-                "issues under an organization (e.g. an IdenTrust OV policy) will reject enrollment with " +
-                "\"No valid domains associated with organization\". This plugin cannot create that link -- " +
-                "confirm in the HydrantId portal that the domain is associated with a vetted organization, " +
-                "and that the organization matches the one the policy issues under.",
-                target);
+            if (string.IsNullOrWhiteSpace(organizationIds))
+            {
+                if (string.IsNullOrWhiteSpace(domain.OrganizationIds))
+                {
+                    flow.Step("DomainValidation.NoOrganizationLink", $"domain='{target}' has no organizationIds");
+                    _logger.LogWarning(
+                        "Domain '{Domain}' is VALIDATED at HydrantId but its organizationIds is empty and the matched " +
+                        "policy reports no organization. A policy that issues under an organization (e.g. an IdenTrust " +
+                        "OV policy) will reject enrollment with \"No valid domains associated with organization\".",
+                        target);
+                }
+                return;
+            }
+
+            flow.Step("DomainValidation.LinkOrganization",
+                $"domain='{target}', organizationIds='{organizationIds}' (was '{domain.OrganizationIds ?? "(none)"}')");
+
+            try
+            {
+                var updated = await client.GetSubmitUpdateDomainOrganizationAsync(domain.Id, organizationIds);
+                domain.OrganizationIds = updated?.OrganizationIds ?? organizationIds;
+            }
+            catch (Exception ex)
+            {
+                flow.Fail($"DomainValidation.LinkOrganization:{target}", ex.Message);
+                _logger.LogWarning(ex,
+                    "EnsureOrganizationLinkedAsync: failed to link domain '{Domain}' to organization '{OrganizationIds}': {Message}",
+                    target, organizationIds, ex.Message);
+            }
         }
 
         /// <summary>

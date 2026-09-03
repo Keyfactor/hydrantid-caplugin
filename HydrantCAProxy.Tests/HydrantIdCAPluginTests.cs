@@ -1062,29 +1062,90 @@ namespace HydrantCAProxy.Tests
         }
 
         // ---------------------------------------------------------------------
-        // Organization link diagnostic
+        // Organization link reconciliation
         // ---------------------------------------------------------------------
+
+        [Fact]
+        public async Task EnsureOrganizationLinkedAsync_NullDomain_IsIgnored()
+        {
+            var plugin = new HydrantIdCAPlugin();
+            var mockClient = new Mock<IHydrantIdClient>(MockBehavior.Strict);
+
+            await plugin.EnsureOrganizationLinkedAsync(mockClient.Object, NewFlow(), null, "example.com", "org-1");
+
+            mockClient.VerifyNoOtherCalls();
+        }
+
+        [Fact]
+        public async Task EnsureOrganizationLinkedAsync_AlreadyLinkedToTheSameOrganization_DoesNotCallUpdate()
+        {
+            var plugin = new HydrantIdCAPlugin();
+            var mockClient = new Mock<IHydrantIdClient>(MockBehavior.Strict);
+            var domain = new Domain { Id = "d1", DomainName = "example.com", Status = DomainStatusEnum.Validated, OrganizationIds = "org-1" };
+
+            await plugin.EnsureOrganizationLinkedAsync(mockClient.Object, NewFlow(), domain, "example.com", "org-1");
+
+            mockClient.VerifyNoOtherCalls();
+        }
 
         [Theory]
         [InlineData(null)]
         [InlineData("")]
         [InlineData("   ")]
-        [InlineData("b9bc825f-09d7-4736-8938-fb541822234a")]
-        public void ReportOrganizationLink_NeverThrows_ForAnyOrganizationIdsValue(string organizationIds)
+        public async Task EnsureOrganizationLinkedAsync_NoOrganizationRequired_NeverCallsUpdate(string organizationIds)
         {
+            // The matched policy reports no organization -- nothing to link, whatever the domain's
+            // current organizationIds is. Only ever logs a diagnostic warning.
             var plugin = new HydrantIdCAPlugin();
+            var mockClient = new Mock<IHydrantIdClient>(MockBehavior.Strict);
+            var domain = new Domain { Id = "d1", DomainName = "example.com", Status = DomainStatusEnum.Validated, OrganizationIds = null };
 
-            plugin.ReportOrganizationLink(NewFlow(),
-                new Domain { DomainName = "example.com", Status = DomainStatusEnum.Validated, OrganizationIds = organizationIds },
-                "example.com");
+            await plugin.EnsureOrganizationLinkedAsync(mockClient.Object, NewFlow(), domain, "example.com", organizationIds);
+
+            mockClient.VerifyNoOtherCalls();
         }
 
         [Fact]
-        public void ReportOrganizationLink_NullDomain_IsIgnored()
+        public async Task EnsureOrganizationLinkedAsync_DomainHasNoOrganization_LinksIt()
         {
             var plugin = new HydrantIdCAPlugin();
+            var mockClient = new Mock<IHydrantIdClient>();
+            var domain = new Domain { Id = "d1", DomainName = "example.com", Status = DomainStatusEnum.Validated, OrganizationIds = null };
+            mockClient.Setup(c => c.GetSubmitUpdateDomainOrganizationAsync("d1", "org-1"))
+                .ReturnsAsync(new Domain { Id = "d1", OrganizationIds = "org-1" });
 
-            plugin.ReportOrganizationLink(NewFlow(), null, "example.com");
+            await plugin.EnsureOrganizationLinkedAsync(mockClient.Object, NewFlow(), domain, "example.com", "org-1");
+
+            mockClient.Verify(c => c.GetSubmitUpdateDomainOrganizationAsync("d1", "org-1"), Times.Once);
+            Assert.Equal("org-1", domain.OrganizationIds);
+        }
+
+        [Fact]
+        public async Task EnsureOrganizationLinkedAsync_DomainLinkedToADifferentOrganization_RelinksIt()
+        {
+            var plugin = new HydrantIdCAPlugin();
+            var mockClient = new Mock<IHydrantIdClient>();
+            var domain = new Domain { Id = "d1", DomainName = "example.com", Status = DomainStatusEnum.Validated, OrganizationIds = "org-old" };
+            mockClient.Setup(c => c.GetSubmitUpdateDomainOrganizationAsync("d1", "org-1"))
+                .ReturnsAsync(new Domain { Id = "d1", OrganizationIds = "org-1" });
+
+            await plugin.EnsureOrganizationLinkedAsync(mockClient.Object, NewFlow(), domain, "example.com", "org-1");
+
+            mockClient.Verify(c => c.GetSubmitUpdateDomainOrganizationAsync("d1", "org-1"), Times.Once);
+        }
+
+        [Fact]
+        public async Task EnsureOrganizationLinkedAsync_UpdateThrows_IsSwallowedRatherThanFailingTheEnrollment()
+        {
+            var plugin = new HydrantIdCAPlugin();
+            var mockClient = new Mock<IHydrantIdClient>();
+            var domain = new Domain { Id = "d1", DomainName = "example.com", Status = DomainStatusEnum.Validated, OrganizationIds = null };
+            mockClient.Setup(c => c.GetSubmitUpdateDomainOrganizationAsync("d1", "org-1"))
+                .ThrowsAsync(new InvalidOperationException("HTTP 500"));
+
+            await plugin.EnsureOrganizationLinkedAsync(mockClient.Object, NewFlow(), domain, "example.com", "org-1");
+
+            mockClient.Verify(c => c.GetSubmitUpdateDomainOrganizationAsync("d1", "org-1"), Times.Once);
         }
 
         [Theory]

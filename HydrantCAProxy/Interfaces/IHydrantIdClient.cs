@@ -24,6 +24,7 @@ namespace Keyfactor.HydrantId.Interfaces
         Task<List<Domain>> GetDomainListAsync();
         Task<Domain> GetSubmitCreateDomainValidationAsync(CreateDomainValidationPayload payload);
         Task<Domain> GetSubmitCheckDomainValidationAsync(string domainId);
+        Task<Domain> GetSubmitUpdateDomainOrganizationAsync(string domainId, string organizationIds);
         Task<Certificate> GetSubmitGetCertificateAsync(string certificateId);
         Task<Certificate> GetSubmitGetCertificateByCsrAsync(string requestTrackingId);
         Task<CertificateStatus> GetSubmitRevokeCertificateAsync(string hydrantId, RevocationReasons revokeReason);
