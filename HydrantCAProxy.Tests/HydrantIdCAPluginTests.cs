@@ -1965,6 +1965,64 @@ namespace HydrantCAProxy.Tests
             Assert.Empty(buffer);
         }
 
+        [Fact]
+        public async Task Synchronize_ScopeCannotBeResolved_StillCompletesTheBuffer()
+        {
+            // Regression: the Gateway is already consuming blockingBuffer when Synchronize runs.
+            // Leaving it open on a scoping failure strands the sync job waiting for items that
+            // will never arrive, instead of surfacing the error.
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetPolicyList()).ReturnsAsync(TenantPolicies());
+            var plugin = MakePluginForCa(mockClient, "99999999-9999-9999-9999-999999999999");
+            var buffer = new BlockingCollection<AnyCAPluginCertificate>(10);
+
+            await Assert.ThrowsAsync<CertificateAuthorityScopeException>(
+                () => plugin.Synchronize(buffer, null, true, CancellationToken.None));
+
+            Assert.True(buffer.IsAddingCompleted);
+            // A consumer must be able to drain to completion rather than block forever.
+            Assert.Empty(buffer.GetConsumingEnumerable().ToList());
+        }
+
+        [Fact]
+        public async Task Synchronize_EveryCertificateFiltered_CompletesWithoutSyncingAnything()
+        {
+            // The shape a wrong CertificateAuthorityId takes when it *does* match a policy:
+            // sync succeeds, imports nothing. Warned about explicitly in the log.
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetPolicyList()).ReturnsAsync(TenantPolicies());
+            SetupCertList(mockClient,
+                MakeItem("theirs", RevocationStatusEnum.Valid, "Their Policy").Object,
+                MakeItem("nopolicy", RevocationStatusEnum.Valid, null).Object);
+            var plugin = MakePluginForCa(mockClient, OwnCaId);
+            var buffer = new BlockingCollection<AnyCAPluginCertificate>(10);
+
+            await plugin.Synchronize(buffer, null, true, CancellationToken.None);
+
+            Assert.Empty(buffer);
+            mockClient.Verify(c => c.GetSubmitGetCertificateAsync(It.IsAny<string>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task Synchronize_ListEntryHasNoPolicyReference_IsFilteredWhenScoped()
+        {
+            // scope.Includes(null, null) is false: a list entry with no policy cannot be
+            // attributed to a CA, and guessing would defeat the isolation.
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetPolicyList()).ReturnsAsync(TenantPolicies());
+            var item = new Mock<ICertificatesResponseItem>();
+            item.SetupGet(i => i.Id).Returns("orphan");
+            item.SetupGet(i => i.RevocationStatus).Returns(RevocationStatusEnum.Valid);
+            item.SetupGet(i => i.Policy).Returns((NameObject)null);
+            SetupCertList(mockClient, item.Object);
+            var plugin = MakePluginForCa(mockClient, OwnCaId);
+            var buffer = new BlockingCollection<AnyCAPluginCertificate>(10);
+
+            await plugin.Synchronize(buffer, null, true, CancellationToken.None);
+
+            Assert.Empty(buffer);
+        }
+
         // --- GetProductIds -----------------------------------------------------
 
         [Fact]

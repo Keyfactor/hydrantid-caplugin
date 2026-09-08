@@ -502,19 +502,25 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             var filteredCount = 0;
             var errorCount = 0;
 
-            // Resolved once per run: the certificate list is account-scoped, so this is what keeps
-            // another CA's certificates out of this CA's inventory.
-            var scope = await ResolveCaPolicyScopeAsync(client);
-            if (!scope.Unscoped)
-            {
-                flow.Step("CertificateAuthorityScope",
-                    $"CA '{CertificateAuthorityId}' owns {scope.Policies.Count} policy(ies): {string.Join(", ", scope.Policies.Select(p => p.Name))}");
-            }
-
-            _ = client.GetSubmitCertificateListRequestAsync(certs, cancelToken);
+            // Policy names of everything excluded, for the diagnostic below.
+            var filteredPolicies = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             try
             {
+                // Resolved once per run: the certificate list is account-scoped, so this is what
+                // keeps another CA's certificates out of this CA's inventory. Inside the try so a
+                // scoping failure still completes blockingBuffer on the way out -- Command is
+                // already consuming it, and leaving it open strands the sync job waiting for
+                // items that will never arrive instead of surfacing the error.
+                var scope = await ResolveCaPolicyScopeAsync(client);
+                if (!scope.Unscoped)
+                {
+                    flow.Step("CertificateAuthorityScope",
+                        $"CA '{CertificateAuthorityId}' owns {scope.Policies.Count} policy(ies): {string.Join(", ", scope.Policies.Select(p => p.Name))}");
+                }
+
+                _ = client.GetSubmitCertificateListRequestAsync(certs, cancelToken);
+
                 foreach (var item in certs.GetConsumingEnumerable(cancelToken))
                 {
                     cancelToken.ThrowIfCancellationRequested();
@@ -549,6 +555,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                         _logger.LogTrace(
                             "Synchronize: filtering out ID={Id}, policy '{Policy}' does not belong to CertificateAuthorityId '{Ca}'",
                             item.Id ?? "(null)", item.Policy?.Name ?? "(null)", CertificateAuthorityId);
+                        filteredPolicies.Add(item.Policy?.Name ?? "(no policy on the list entry)");
                         filteredCount++;
                         continue;
                     }
@@ -603,6 +610,24 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
 
                 flow.Step("SyncComplete",
                     $"processed={processedCount}, filtered={filteredCount}, skipped={skippedCount}, errors={errorCount}");
+
+                // Scoping that excludes everything is indistinguishable from an empty CA in the
+                // counts alone, and is the shape a mismatch between the policy names on the
+                // certificate list and those on the policy list takes -- so name it explicitly
+                // rather than leaving an operator to infer it from a silent, empty inventory.
+                if (processedCount == 0 && filteredCount > 0)
+                {
+                    _logger.LogWarning(
+                        "Synchronize: every one of the {Filtered} certificate(s) in this HydrantId account was excluded by " +
+                        "CertificateAuthorityId '{Ca}', so nothing was synchronized. Policies owned by this CA: {Owned}. " +
+                        "Policies seen on the excluded certificates: {Seen}. If a policy appears in both lists, the certificate " +
+                        "list and policy list disagree on its identity; if this CA should own one of the policies listed as " +
+                        "excluded, correct CertificateAuthorityId (it is the policy's 'certificateAuthorityId', not its " +
+                        "'organizationId').",
+                        filteredCount, CertificateAuthorityId,
+                        string.Join(", ", scope.Policies.Select(p => p.Name)),
+                        string.Join(", ", filteredPolicies));
+                }
             }
             catch (OperationCanceledException)
             {
