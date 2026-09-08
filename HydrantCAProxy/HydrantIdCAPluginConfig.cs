@@ -34,6 +34,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             public static string HydrantIdOrgCityProvPostalCodeCountry = "HydrantIdOrgCityProvPostalCodeCountry";
             public static string HydrantIdEmailAddress = "HydrantIdEmailAddress";
             public static string HydrantIdPhoneNumber = "HydrantIdPhoneNumber";
+            public static string CertificateAuthorityId = "CertificateAuthorityId";
             public static string DnsPropagationDelaySeconds = "DnsPropagationDelaySeconds";
             public static string DomainValidationTimeoutSeconds = "DomainValidationTimeoutSeconds";
             public static string DomainValidationPollIntervalSeconds = "DomainValidationPollIntervalSeconds";
@@ -53,6 +54,10 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             public string HydrantIdOrgCityProvPostalCodeCountry { get; set; }
             public string HydrantIdEmailAddress { get; set; }
             public string HydrantIdPhoneNumber { get; set; }
+            // Scopes this logical CA to one certificate authority within the HydrantId tenant.
+            // Blank means unscoped -- every policy and certificate in the tenant, which is the
+            // behaviour from before this setting existed.
+            public string CertificateAuthorityId { get; set; }
             // Nullable so an absent connector field (null) stays distinguishable from an
             // operator explicitly setting 0, which disables the propagation delay.
             public int? DnsPropagationDelaySeconds { get; set; }
@@ -138,6 +143,13 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                 [ConfigConstants.HydrantIdPhoneNumber] = new PropertyConfigInfo()
                 {
                     Comments = "Optional. Organization contact phone number required by some HydrantId validators (e.g. IdenTrust) on domain validation requests.",
+                    Hidden = false,
+                    DefaultValue = "",
+                    Type = "String"
+                },
+                [ConfigConstants.CertificateAuthorityId] = new PropertyConfigInfo()
+                {
+                    Comments = "Optional but strongly recommended when the HydrantId tenant issues from more than one certificate authority. Scopes this logical CA to a single HydrantId CA, identified by the 'certificateAuthorityId' GUID that GET /api/v2/policies reports on each policy. HydrantId's policy and certificate endpoints are account-scoped rather than CA-scoped, so leaving this blank means every logical CA defined against the tenant offers every policy, synchronizes every certificate, and can revoke any of them -- define one logical CA per HydrantId CA and set this on each. When set, only policies belonging to this CA are offered as Product IDs and usable for enrollment, only their certificates are synchronized, and reading or revoking a certificate issued under another CA's policy is refused. Leave blank for a single-CA tenant.",
                     Hidden = false,
                     DefaultValue = "",
                     Type = "String"

@@ -16,6 +16,7 @@ using Keyfactor.HydrantId;
 using Keyfactor.HydrantId.Client;
 using Keyfactor.HydrantId.Client.Models;
 using Keyfactor.HydrantId.Client.Models.Enums;
+using Keyfactor.HydrantId.Exceptions;
 using Keyfactor.HydrantId.Interfaces;
 using Keyfactor.PKI.Enums.EJBCA;
 using Microsoft.Extensions.Logging;
@@ -89,6 +90,9 @@ namespace HydrantCAProxy.Tests
 
         private static EnrollmentProductInfo ProductInfo(Dictionary<string, string> parameters = null) =>
             new EnrollmentProductInfo { ProductID = "Test Policy", ProductParameters = parameters ?? new Dictionary<string, string>() };
+
+        private static EnrollmentProductInfo ProductInfoFor(string productId) =>
+            new EnrollmentProductInfo { ProductID = productId, ProductParameters = new Dictionary<string, string>() };
 
         // ---------------------------------------------------------------------
         // Initialize
@@ -1707,6 +1711,518 @@ namespace HydrantCAProxy.Tests
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
                 plugin.Synchronize(buffer, null, true, cts.Token));
         }
+
+        // ---------------------------------------------------------------------
+        // CertificateAuthorityId -- per-logical-CA scoping
+        // ---------------------------------------------------------------------
+
+        private const string OwnCaId = "11111111-1111-1111-1111-111111111111";
+        private const string ForeignCaId = "22222222-2222-2222-2222-222222222222";
+
+        private static HydrantIdCAPlugin MakePluginForCa(Mock<IHydrantIdClient> client, string certificateAuthorityId)
+        {
+            var data = ValidConnectionData();
+            data[HydrantIdCAPluginConfig.ConfigConstants.CertificateAuthorityId] = certificateAuthorityId;
+            var plugin = new HydrantIdCAPlugin();
+            plugin.Initialize(new FakeConfigProvider { CAConnectionData = data }, Mock.Of<ICertificateDataReader>());
+            if (client != null)
+                plugin.ClientFactory = _ => client.Object;
+            return plugin;
+        }
+
+        private static Policy PolicyFor(string name, string caId, Guid? id = null) => new Policy
+        {
+            Id = id ?? Guid.NewGuid(),
+            Name = name,
+            CertificateAuthorityId = caId == null ? (Guid?)null : Guid.Parse(caId),
+            Details = new PolicyDetails()
+        };
+
+        // The tenant as a whole: one policy per CA, mirroring the account-scoped policy list.
+        private static readonly Guid OwnPolicyId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+        private static readonly Guid ForeignPolicyId = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+
+        private static List<Policy> TenantPolicies() => new List<Policy>
+        {
+            PolicyFor("Mine Policy", OwnCaId, OwnPolicyId),
+            PolicyFor("Their Policy", ForeignCaId, ForeignPolicyId)
+        };
+
+        [Theory]
+        // Unscoped accepts every policy -- the behaviour before the setting existed.
+        [InlineData(null, OwnCaId, true)]
+        [InlineData("", ForeignCaId, true)]
+        [InlineData("   ", null, true)]
+        // Scoped accepts only its own CA, case-insensitively and ignoring surrounding whitespace.
+        [InlineData(OwnCaId, OwnCaId, true)]
+        [InlineData("11111111-1111-1111-1111-111111111111", "11111111-1111-1111-1111-111111111111", true)]
+        [InlineData("  11111111-1111-1111-1111-111111111111  ", OwnCaId, true)]
+        [InlineData(OwnCaId, ForeignCaId, false)]
+        // Fail closed when HydrantId reports no certificateAuthorityId on the policy.
+        [InlineData(OwnCaId, null, false)]
+        public void PolicyBelongsToThisCa_ScopesToTheConfiguredCa(string configuredCa, string policyCa, bool expected)
+        {
+            var plugin = MakePluginForCa(null, configuredCa);
+
+            Assert.Equal(expected, plugin.PolicyBelongsToThisCa(PolicyFor("P", policyCa)));
+        }
+
+        [Fact]
+        public void PolicyBelongsToThisCa_NullPolicy_IsOutOfScopeWhenScoped()
+        {
+            Assert.False(MakePluginForCa(null, OwnCaId).PolicyBelongsToThisCa(null));
+            Assert.True(MakePluginForCa(null, null).PolicyBelongsToThisCa(null));
+        }
+
+        [Fact]
+        public async Task ResolveCaPolicyScopeAsync_Unscoped_IncludesEverythingWithoutFetchingPolicies()
+        {
+            var mockClient = new Mock<IHydrantIdClient>(MockBehavior.Strict);
+            var plugin = MakePluginForCa(mockClient, null);
+
+            var scope = await plugin.ResolveCaPolicyScopeAsync(mockClient.Object);
+
+            Assert.True(scope.Unscoped);
+            Assert.True(scope.Includes(ForeignPolicyId, "Their Policy"));
+            mockClient.VerifyNoOtherCalls();
+        }
+
+        [Fact]
+        public async Task ResolveCaPolicyScopeAsync_Scoped_IncludesOnlyItsOwnPolicies()
+        {
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetPolicyList()).ReturnsAsync(TenantPolicies());
+            var plugin = MakePluginForCa(mockClient, OwnCaId);
+
+            var scope = await plugin.ResolveCaPolicyScopeAsync(mockClient.Object);
+
+            Assert.False(scope.Unscoped);
+            Assert.Equal("Mine Policy", scope.Policies.Single().Name);
+            Assert.True(scope.Includes(OwnPolicyId, "Mine Policy"));
+            Assert.False(scope.Includes(ForeignPolicyId, "Their Policy"));
+        }
+
+        [Fact]
+        public async Task ResolveCaPolicyScopeAsync_NoPolicyMatches_ThrowsRatherThanSilentlyUnscoping()
+        {
+            // A CertificateAuthorityId matching nothing means a wrong GUID, or a tenant not
+            // populating certificateAuthorityId at all. Syncing everything would restore the
+            // contamination the setting exists to prevent.
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetPolicyList()).ReturnsAsync(TenantPolicies());
+            var plugin = MakePluginForCa(mockClient, "99999999-9999-9999-9999-999999999999");
+
+            var ex = await Assert.ThrowsAsync<CertificateAuthorityScopeException>(
+                () => plugin.ResolveCaPolicyScopeAsync(mockClient.Object));
+
+            Assert.Contains("2 of 2 policies report a certificateAuthorityId", ex.Message);
+        }
+
+        [Fact]
+        public async Task ResolveCaPolicyScopeAsync_TenantReportsNoCertificateAuthorityIds_SaysSo()
+        {
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetPolicyList()).ReturnsAsync(new List<Policy>
+            {
+                PolicyFor("Unattributed", null)
+            });
+            var plugin = MakePluginForCa(mockClient, OwnCaId);
+
+            var ex = await Assert.ThrowsAsync<CertificateAuthorityScopeException>(
+                () => plugin.ResolveCaPolicyScopeAsync(mockClient.Object));
+
+            Assert.Contains("0 of 1 policies report a certificateAuthorityId", ex.Message);
+        }
+
+        [Fact]
+        public void CaPolicyScope_MatchesOnPolicyNameWhenTheListItemCarriesNoId()
+        {
+            // HydrantId's certificate *list* items have only ever been observed carrying the
+            // policy name, so name matching is the fallback that makes sync scoping work at all.
+            var scope = HydrantIdCAPlugin.CaPolicyScope.For(new[] { PolicyFor("Mine Policy", OwnCaId, OwnPolicyId) });
+
+            Assert.True(scope.Includes(null, "Mine Policy"));
+            Assert.True(scope.Includes(null, "mine policy"));
+            Assert.False(scope.Includes(null, "Their Policy"));
+            Assert.False(scope.Includes(null, null));
+        }
+
+        [Fact]
+        public void CaPolicyScope_MatchesOnPolicyIdEvenAfterARename()
+        {
+            var scope = HydrantIdCAPlugin.CaPolicyScope.For(new[] { PolicyFor("Old Name", OwnCaId, OwnPolicyId) });
+
+            Assert.True(scope.Includes(OwnPolicyId, "Renamed Since Sync"));
+        }
+
+        // --- Synchronize -------------------------------------------------------
+
+        [Fact]
+        public async Task Synchronize_CertificateFromAnotherCA_IsFilteredOutWithoutFetchingIt()
+        {
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetPolicyList()).ReturnsAsync(TenantPolicies());
+            SetupCertList(mockClient, MakeItem("theirs", RevocationStatusEnum.Valid, "Their Policy").Object);
+            var plugin = MakePluginForCa(mockClient, OwnCaId);
+            var buffer = new BlockingCollection<AnyCAPluginCertificate>(10);
+
+            await plugin.Synchronize(buffer, null, true, CancellationToken.None);
+
+            Assert.Empty(buffer);
+            // The point of scoping by policy rather than issuer DN: no detail fetch for a
+            // certificate that was never this CA's to begin with.
+            mockClient.Verify(c => c.GetSubmitGetCertificateAsync(It.IsAny<string>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task Synchronize_CertificateFromThisCA_IsSynced()
+        {
+            var (_, pem, _) = MakeSelfSignedCert();
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetPolicyList()).ReturnsAsync(TenantPolicies());
+            SetupCertList(mockClient, MakeItem("mine", RevocationStatusEnum.Valid, "Mine Policy").Object);
+            mockClient.Setup(c => c.GetSubmitGetCertificateAsync("mine")).ReturnsAsync(new Certificate { Pem = pem });
+            var plugin = MakePluginForCa(mockClient, OwnCaId);
+            var buffer = new BlockingCollection<AnyCAPluginCertificate>(10);
+
+            await plugin.Synchronize(buffer, null, true, CancellationToken.None);
+
+            Assert.Equal("mine", buffer.Single().CARequestID);
+        }
+
+        [Fact]
+        public async Task Synchronize_MixedCAs_SyncsOnlyThisCAsCertificates()
+        {
+            var (_, pem, _) = MakeSelfSignedCert();
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetPolicyList()).ReturnsAsync(TenantPolicies());
+            SetupCertList(mockClient,
+                MakeItem("mine", RevocationStatusEnum.Valid, "Mine Policy").Object,
+                MakeItem("theirs", RevocationStatusEnum.Valid, "Their Policy").Object);
+            mockClient.Setup(c => c.GetSubmitGetCertificateAsync(It.IsAny<string>())).ReturnsAsync(new Certificate { Pem = pem });
+            var plugin = MakePluginForCa(mockClient, OwnCaId);
+            var buffer = new BlockingCollection<AnyCAPluginCertificate>(10);
+
+            await plugin.Synchronize(buffer, null, true, CancellationToken.None);
+
+            Assert.Equal("mine", buffer.Single().CARequestID);
+        }
+
+        [Fact]
+        public async Task Synchronize_TwoLogicalCAsOverOneTenant_DoNotSeeEachOthersCertificates()
+        {
+            var (_, pem, _) = MakeSelfSignedCert();
+
+            async Task<List<string>> SyncFor(string caId)
+            {
+                var mockClient = new Mock<IHydrantIdClient>();
+                mockClient.Setup(c => c.GetPolicyList()).ReturnsAsync(TenantPolicies());
+                SetupCertList(mockClient,
+                    MakeItem("mine", RevocationStatusEnum.Valid, "Mine Policy").Object,
+                    MakeItem("theirs", RevocationStatusEnum.Valid, "Their Policy").Object);
+                mockClient.Setup(c => c.GetSubmitGetCertificateAsync(It.IsAny<string>())).ReturnsAsync(new Certificate { Pem = pem });
+                var plugin = MakePluginForCa(mockClient, caId);
+                var buffer = new BlockingCollection<AnyCAPluginCertificate>(10);
+                await plugin.Synchronize(buffer, null, true, CancellationToken.None);
+                return buffer.Select(c => c.CARequestID).ToList();
+            }
+
+            Assert.Equal(new[] { "mine" }, await SyncFor(OwnCaId));
+            Assert.Equal(new[] { "theirs" }, await SyncFor(ForeignCaId));
+        }
+
+        [Fact]
+        public async Task Synchronize_Unscoped_SyncsEveryCA()
+        {
+            var (_, pem, _) = MakeSelfSignedCert();
+            var mockClient = new Mock<IHydrantIdClient>();
+            SetupCertList(mockClient,
+                MakeItem("mine", RevocationStatusEnum.Valid, "Mine Policy").Object,
+                MakeItem("theirs", RevocationStatusEnum.Valid, "Their Policy").Object);
+            mockClient.Setup(c => c.GetSubmitGetCertificateAsync(It.IsAny<string>())).ReturnsAsync(new Certificate { Pem = pem });
+            var plugin = MakePlugin(mockClient);
+            var buffer = new BlockingCollection<AnyCAPluginCertificate>(10);
+
+            await plugin.Synchronize(buffer, null, true, CancellationToken.None);
+
+            Assert.Equal(2, buffer.Count);
+            // No policy list needed when nothing is being scoped.
+            mockClient.Verify(c => c.GetPolicyList(), Times.Never);
+        }
+
+        [Fact]
+        public async Task Synchronize_ScopeCannotBeResolved_FailsRatherThanSyncingEverything()
+        {
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetPolicyList()).ReturnsAsync(TenantPolicies());
+            SetupCertList(mockClient, MakeItem("mine", RevocationStatusEnum.Valid, "Mine Policy").Object);
+            var plugin = MakePluginForCa(mockClient, "99999999-9999-9999-9999-999999999999");
+            var buffer = new BlockingCollection<AnyCAPluginCertificate>(10);
+
+            await Assert.ThrowsAsync<CertificateAuthorityScopeException>(
+                () => plugin.Synchronize(buffer, null, true, CancellationToken.None));
+
+            Assert.Empty(buffer);
+        }
+
+        // --- GetProductIds -----------------------------------------------------
+
+        [Fact]
+        public void GetProductIds_Scoped_OffersOnlyThisCAsPolicies()
+        {
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetPolicyList()).ReturnsAsync(TenantPolicies());
+            var plugin = MakePluginForCa(mockClient, OwnCaId);
+
+            Assert.Equal(new[] { "Mine Policy" }, plugin.GetProductIds());
+        }
+
+        [Fact]
+        public void GetProductIds_Unscoped_OffersEveryPolicy()
+        {
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetPolicyList()).ReturnsAsync(TenantPolicies());
+            var plugin = MakePlugin(mockClient);
+
+            Assert.Equal(new[] { "Mine Policy", "Their Policy" }, plugin.GetProductIds());
+        }
+
+        [Fact]
+        public void GetProductIds_ScopedToACaWithNoPolicies_ReturnsEmptyRatherThanEverything()
+        {
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetPolicyList()).ReturnsAsync(TenantPolicies());
+            var plugin = MakePluginForCa(mockClient, "99999999-9999-9999-9999-999999999999");
+
+            Assert.Empty(plugin.GetProductIds());
+        }
+
+        // --- Enroll ------------------------------------------------------------
+
+        private static Mock<IHydrantIdClient> ClientThatIssues(string pem, Guid certId)
+        {
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetPolicyList()).ReturnsAsync(TenantPolicies());
+            mockClient.Setup(c => c.GetSubmitEnrollmentAsync(It.IsAny<CertRequestBody>()))
+                .ReturnsAsync(new CertRequestResult { RequestStatus = new CertRequestStatus { Id = "tracking-1" } });
+            mockClient.Setup(c => c.GetSubmitGetCertificateByCsrAsync("tracking-1"))
+                .ReturnsAsync(new Certificate { Id = certId });
+            mockClient.Setup(c => c.GetSubmitGetCertificateAsync(certId.ToString()))
+                .ReturnsAsync(new Certificate { Pem = pem, RevocationStatus = RevocationStatusEnum.Valid });
+            return mockClient;
+        }
+
+        [Fact]
+        public async Task Enroll_PolicyBelongsToThisCA_Issues()
+        {
+            var (_, pem, base64) = MakeSelfSignedCert();
+            var certId = Guid.NewGuid();
+            var plugin = MakePluginForCa(ClientThatIssues(pem, certId), OwnCaId);
+
+            var result = await plugin.Enroll(SampleCsr, "subj", null,
+                ProductInfoFor("Mine Policy"), RequestFormat.PKCS10, EnrollmentType.New);
+
+            Assert.Equal((int)EndEntityStatus.GENERATED, result.Status);
+            Assert.Equal(base64, result.Certificate);
+        }
+
+        [Fact]
+        public async Task Enroll_PolicyBelongsToAnotherCA_IsRefused()
+        {
+            var (_, pem, _) = MakeSelfSignedCert();
+            var mockClient = ClientThatIssues(pem, Guid.NewGuid());
+            var plugin = MakePluginForCa(mockClient, OwnCaId);
+
+            var result = await plugin.Enroll(SampleCsr, "subj", null,
+                ProductInfoFor("Their Policy"), RequestFormat.PKCS10, EnrollmentType.New);
+
+            Assert.Equal((int)EndEntityStatus.FAILED, result.Status);
+            Assert.Contains(ForeignCaId, result.StatusMessage);
+            // Refused before anything was issued.
+            mockClient.Verify(c => c.GetSubmitEnrollmentAsync(It.IsAny<CertRequestBody>()), Times.Never);
+        }
+
+        // --- GetSingleRecord ---------------------------------------------------
+
+        [Fact]
+        public async Task GetSingleRecord_CertificateFromAnotherCA_Throws()
+        {
+            var (_, pem, _) = MakeSelfSignedCert();
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetPolicyList()).ReturnsAsync(TenantPolicies());
+            var certId = Guid.NewGuid().ToString();
+            mockClient.Setup(c => c.GetSubmitGetCertificateAsync(certId))
+                .ReturnsAsync(new Certificate
+                {
+                    Pem = pem,
+                    Policy = new CertRequestPolicy { Id = ForeignPolicyId, Name = "Their Policy" }
+                });
+            var plugin = MakePluginForCa(mockClient, OwnCaId);
+
+            var ex = await Assert.ThrowsAsync<CertificateAuthorityScopeException>(() => plugin.GetSingleRecord(certId));
+
+            Assert.Contains("different logical CA", ex.Message);
+            Assert.Contains("Their Policy", ex.Message);
+        }
+
+        [Fact]
+        public async Task GetSingleRecord_CertificateFromThisCA_IsReturned()
+        {
+            var (_, pem, base64) = MakeSelfSignedCert();
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetPolicyList()).ReturnsAsync(TenantPolicies());
+            var certId = Guid.NewGuid().ToString();
+            mockClient.Setup(c => c.GetSubmitGetCertificateAsync(certId))
+                .ReturnsAsync(new Certificate
+                {
+                    Pem = pem,
+                    RevocationStatus = RevocationStatusEnum.Valid,
+                    Policy = new CertRequestPolicy { Id = OwnPolicyId, Name = "Mine Policy" }
+                });
+            var plugin = MakePluginForCa(mockClient, OwnCaId);
+
+            var result = await plugin.GetSingleRecord(certId);
+
+            Assert.Equal(base64, result.Certificate);
+            Assert.Equal((int)EndEntityStatus.GENERATED, result.Status);
+        }
+
+        [Fact]
+        public async Task GetSingleRecordAsync_ScopeNotEnforced_SkipsThePolicyLookupEntirely()
+        {
+            // The post-enrollment and renewal lookups take this path: enrollment already checked
+            // the policy, so re-checking would only add a policy list round trip per issuance.
+            var (_, pem, base64) = MakeSelfSignedCert();
+            var mockClient = new Mock<IHydrantIdClient>();
+            var certId = Guid.NewGuid().ToString();
+            mockClient.Setup(c => c.GetSubmitGetCertificateAsync(certId))
+                .ReturnsAsync(new Certificate
+                {
+                    Pem = pem,
+                    RevocationStatus = RevocationStatusEnum.Valid,
+                    Policy = new CertRequestPolicy { Id = ForeignPolicyId, Name = "Their Policy" }
+                });
+            var plugin = MakePluginForCa(mockClient, OwnCaId);
+
+            var result = await plugin.GetSingleRecordAsync(certId, enforceCaScope: false);
+
+            Assert.Equal(base64, result.Certificate);
+            mockClient.Verify(c => c.GetPolicyList(), Times.Never);
+        }
+
+        // --- ValidateCAConnectionInfo -----------------------------------------
+
+        [Fact]
+        public async Task ValidateCAConnectionInfo_WrongCertificateAuthorityId_FailsAtSaveTime()
+        {
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.Ping()).ReturnsAsync(true);
+            mockClient.Setup(c => c.GetPolicyList()).ReturnsAsync(TenantPolicies());
+            var plugin = MakePluginForCa(mockClient, "99999999-9999-9999-9999-999999999999");
+            var data = ValidConnectionData();
+            data[HydrantIdCAPluginConfig.ConfigConstants.CertificateAuthorityId] = "99999999-9999-9999-9999-999999999999";
+
+            await Assert.ThrowsAsync<CertificateAuthorityScopeException>(() => plugin.ValidateCAConnectionInfo(data));
+        }
+
+        [Fact]
+        public async Task ValidateCAConnectionInfo_ValidCertificateAuthorityId_Passes()
+        {
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.Ping()).ReturnsAsync(true);
+            mockClient.Setup(c => c.GetPolicyList()).ReturnsAsync(TenantPolicies());
+            var plugin = MakePluginForCa(mockClient, OwnCaId);
+            var data = ValidConnectionData();
+            data[HydrantIdCAPluginConfig.ConfigConstants.CertificateAuthorityId] = OwnCaId;
+
+            await plugin.ValidateCAConnectionInfo(data);
+        }
+
+        [Fact]
+        public async Task ValidateCAConnectionInfo_Unscoped_DoesNotRequireAPolicyLookup()
+        {
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.Ping()).ReturnsAsync(true);
+            var plugin = MakePlugin(mockClient);
+
+            await plugin.ValidateCAConnectionInfo(ValidConnectionData());
+
+            mockClient.Verify(c => c.GetPolicyList(), Times.Never);
+        }
+
+        // --- Revoke ------------------------------------------------------------
+
+        [Fact]
+        public async Task Revoke_CertificateFromAnotherCA_IsRefusedWithoutRevoking()
+        {
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetPolicyList()).ReturnsAsync(TenantPolicies());
+            var certId = Guid.NewGuid().ToString();
+            mockClient.Setup(c => c.GetSubmitGetCertificateAsync(certId))
+                .ReturnsAsync(new Certificate
+                {
+                    Policy = new CertRequestPolicy { Id = ForeignPolicyId, Name = "Their Policy" }
+                });
+            var plugin = MakePluginForCa(mockClient, OwnCaId);
+
+            var ex = await Assert.ThrowsAsync<CertificateAuthorityScopeException>(
+                () => plugin.Revoke(certId, "00", 0));
+
+            Assert.Contains("Refusing to revoke", ex.Message);
+            mockClient.Verify(c => c.GetSubmitRevokeCertificateAsync(It.IsAny<string>(), It.IsAny<RevocationReasons>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task Revoke_CertificateFromThisCA_Revokes()
+        {
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetPolicyList()).ReturnsAsync(TenantPolicies());
+            var certId = Guid.NewGuid().ToString();
+            mockClient.Setup(c => c.GetSubmitGetCertificateAsync(certId))
+                .ReturnsAsync(new Certificate
+                {
+                    Policy = new CertRequestPolicy { Id = OwnPolicyId, Name = "Mine Policy" }
+                });
+            mockClient.Setup(c => c.GetSubmitRevokeCertificateAsync(certId, It.IsAny<RevocationReasons>()))
+                .ReturnsAsync(new CertificateStatus { RevocationStatus = RevocationStatusEnum.Revoked });
+            var plugin = MakePluginForCa(mockClient, OwnCaId);
+
+            var result = await plugin.Revoke(certId, "00", 0);
+
+            Assert.Equal((int)EndEntityStatus.REVOKED, result);
+            mockClient.Verify(c => c.GetSubmitRevokeCertificateAsync(certId, It.IsAny<RevocationReasons>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task Revoke_CertificateCannotBeRead_IsRefusedRatherThanRevokedBlind()
+        {
+            var mockClient = new Mock<IHydrantIdClient>();
+            mockClient.Setup(c => c.GetPolicyList()).ReturnsAsync(TenantPolicies());
+            var certId = Guid.NewGuid().ToString();
+            mockClient.Setup(c => c.GetSubmitGetCertificateAsync(certId)).ReturnsAsync((Certificate)null);
+            var plugin = MakePluginForCa(mockClient, OwnCaId);
+
+            await Assert.ThrowsAsync<CertificateAuthorityScopeException>(() => plugin.Revoke(certId, "00", 0));
+
+            mockClient.Verify(c => c.GetSubmitRevokeCertificateAsync(It.IsAny<string>(), It.IsAny<RevocationReasons>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task Revoke_Unscoped_DoesNotPayForAnOwnershipCheck()
+        {
+            var mockClient = new Mock<IHydrantIdClient>();
+            var certId = Guid.NewGuid().ToString();
+            mockClient.Setup(c => c.GetSubmitRevokeCertificateAsync(certId, It.IsAny<RevocationReasons>()))
+                .ReturnsAsync(new CertificateStatus { RevocationStatus = RevocationStatusEnum.Revoked });
+            var plugin = MakePlugin(mockClient);
+
+            var result = await plugin.Revoke(certId, "00", 0);
+
+            Assert.Equal((int)EndEntityStatus.REVOKED, result);
+            mockClient.Verify(c => c.GetSubmitGetCertificateAsync(It.IsAny<string>()), Times.Never);
+            mockClient.Verify(c => c.GetPolicyList(), Times.Never);
+        }
+
 
         // ---------------------------------------------------------------------
         // Enroll -- New enrollment path

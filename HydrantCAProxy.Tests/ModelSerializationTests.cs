@@ -132,6 +132,48 @@ namespace HydrantCAProxy.Tests
             Assert.Equal("Doe", u.LastName);
         }
 
+        // Verified against a real GET /api/v2/policies response from the staging tenant. CA
+        // scoping is built on certificateAuthorityId, so this pins the field actually arriving
+        // and deserializing rather than merely being declared on the model.
+        [Fact]
+        public void Policy_DeserializesCertificateAuthorityIdFromALiveResponse()
+        {
+            const string json = @"{
+                ""id"": ""2f9ed1cc-3a4f-450b-99b9-18882f2d4a7f"",
+                ""name"": ""AutoEnrollment - ECDSA"",
+                ""type"": ""EJBCA"",
+                ""apiId"": 10002,
+                ""details"": { ""validator"": null },
+                ""enabled"": { ""ui"": true, ""rest"": true },
+                ""certificateAuthorityId"": ""96ffd5ab-b6c3-4ec6-8060-88bbefe3eff1"",
+                ""organizationId"": ""b9bc825f-09d7-4736-8938-fb541822234a""
+            }";
+
+            var policy = JsonConvert.DeserializeObject<Policy>(json);
+
+            Assert.Equal(Guid.Parse("2f9ed1cc-3a4f-450b-99b9-18882f2d4a7f"), policy.Id);
+            Assert.Equal("AutoEnrollment - ECDSA", policy.Name);
+            Assert.Equal(10002, policy.ApiId);
+            Assert.Equal(Guid.Parse("96ffd5ab-b6c3-4ec6-8060-88bbefe3eff1"), policy.CertificateAuthorityId);
+            Assert.Equal(Guid.Parse("b9bc825f-09d7-4736-8938-fb541822234a"), policy.OrganizationId);
+        }
+
+        // The certificate detail record returns its policy reference with both id and name; the
+        // list endpoint has only ever been observed returning the name. CA scoping reads whichever
+        // is present, so both shapes have to deserialize.
+        [Fact]
+        public void NameObject_DeserializesPolicyReferenceWithAndWithoutAnId()
+        {
+            var withId = JsonConvert.DeserializeObject<NameObject>(
+                @"{""id"":""0a152cd7-e75b-479d-b35e-dbfb0b2757c6"",""name"":""Keyfactor IdenTrust TLS OV""}");
+            var nameOnly = JsonConvert.DeserializeObject<NameObject>(@"{""name"":""Keyfactor IdenTrust TLS OV""}");
+
+            Assert.Equal(Guid.Parse("0a152cd7-e75b-479d-b35e-dbfb0b2757c6"), withId.Id);
+            Assert.Equal("Keyfactor IdenTrust TLS OV", withId.Name);
+            Assert.Null(nameOnly.Id);
+            Assert.Equal("Keyfactor IdenTrust TLS OV", nameOnly.Name);
+        }
+
         [Fact]
         public void CertRequestPolicy_PropertiesRoundTrip()
         {

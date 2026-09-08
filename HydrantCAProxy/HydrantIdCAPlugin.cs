@@ -6,6 +6,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
 using Keyfactor.HydrantId.Client;
+using Keyfactor.HydrantId.Exceptions;
 using Keyfactor.HydrantId.Interfaces;
 using Keyfactor.HydrantId;
 using Keyfactor.Logging;
@@ -91,6 +92,136 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             _config?.DomainValidationPollIntervalSeconds is int interval && interval > 0
                 ? interval
                 : DefaultDomainValidationPollIntervalSeconds;
+
+        /// <summary>
+        /// The HydrantId certificate authority this logical CA is scoped to, or null/blank when
+        /// unscoped. Matched against the certificateAuthorityId each policy reports on
+        /// GET /api/v2/policies.
+        /// </summary>
+        internal string CertificateAuthorityId => _config?.CertificateAuthorityId;
+
+        internal bool IsCaScoped => !string.IsNullOrWhiteSpace(CertificateAuthorityId);
+
+        /// <summary>
+        /// Whether a policy belongs to the CA this logical CA is scoped to. Unscoped CAs accept
+        /// every policy, which is the behaviour from before CertificateAuthorityId existed.
+        ///
+        /// A policy whose certificateAuthorityId HydrantId did not populate does *not* belong to
+        /// a scoped CA: its provenance cannot be established, and wrongly claiming a foreign
+        /// policy is the failure this scoping exists to prevent. Callers surface that case rather
+        /// than dropping it silently.
+        /// </summary>
+        internal bool PolicyBelongsToThisCa(Policy policy)
+        {
+            if (!IsCaScoped)
+                return true;
+
+            if (policy?.CertificateAuthorityId == null)
+                return false;
+
+            return string.Equals(policy.CertificateAuthorityId.Value.ToString(),
+                CertificateAuthorityId.Trim(), StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// The set of policies this logical CA owns, used to decide whether a certificate is its
+        /// to synchronize, read or revoke.
+        ///
+        /// HydrantId's certificate endpoints are account-scoped and carry no CA reference of their
+        /// own -- a certificate's only link to the issuing CA is the policy it was issued under,
+        /// and only GET /api/v2/policies knows which CA a policy belongs to. So scoping resolves
+        /// the tenant's policies once per operation and matches certificates by their policy
+        /// reference, which the certificate list already returns; that keeps foreign certificates
+        /// out without a detail fetch per certificate just to inspect an issuer DN.
+        /// </summary>
+        internal sealed class CaPolicyScope
+        {
+            private readonly HashSet<string> _policyIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            private readonly HashSet<string> _policyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            private CaPolicyScope(bool unscoped) => Unscoped = unscoped;
+
+            /// <summary>True when no CertificateAuthorityId is configured: everything is in scope.</summary>
+            public bool Unscoped { get; }
+
+            /// <summary>Policies in the tenant that belong to the configured CA.</summary>
+            public List<Policy> Policies { get; } = new List<Policy>();
+
+            public static CaPolicyScope Everything() => new CaPolicyScope(unscoped: true);
+
+            public static CaPolicyScope For(IEnumerable<Policy> policies)
+            {
+                var scope = new CaPolicyScope(unscoped: false);
+
+                foreach (var policy in policies)
+                {
+                    scope.Policies.Add(policy);
+
+                    if (policy.Id.HasValue)
+                        scope._policyIds.Add(policy.Id.Value.ToString());
+                    if (!string.IsNullOrWhiteSpace(policy.Name))
+                        scope._policyNames.Add(policy.Name);
+                }
+
+                return scope;
+            }
+
+            /// <summary>
+            /// Whether a certificate issued under the referenced policy is in scope. The id is
+            /// preferred because it survives a policy rename; the name is the fallback, because
+            /// HydrantId's certificate *list* items have only ever been observed carrying the
+            /// policy name. A reference with neither is out of scope -- see PolicyBelongsToThisCa
+            /// on why unverifiable provenance fails closed.
+            /// </summary>
+            public bool Includes(Guid? policyId, string policyName)
+            {
+                if (Unscoped)
+                    return true;
+
+                if (policyId.HasValue && _policyIds.Contains(policyId.Value.ToString()))
+                    return true;
+
+                return !string.IsNullOrWhiteSpace(policyName) && _policyNames.Contains(policyName);
+            }
+        }
+
+        /// <summary>
+        /// Resolves <see cref="CaPolicyScope"/> for this logical CA. Throws when scoping is
+        /// configured but no policy in the tenant matches, rather than reporting an empty or
+        /// unfiltered result: a CertificateAuthorityId that matches nothing means the GUID is
+        /// wrong, or HydrantId is not populating certificateAuthorityId on policies at all, and
+        /// either way silently synchronizing everything would restore exactly the cross-CA
+        /// contamination the setting exists to prevent.
+        /// </summary>
+        internal async Task<CaPolicyScope> ResolveCaPolicyScopeAsync(IHydrantIdClient client)
+        {
+            if (!IsCaScoped)
+                return CaPolicyScope.Everything();
+
+            var policies = await client.GetPolicyList() ?? new List<Policy>();
+            var owned = policies.Where(PolicyBelongsToThisCa).ToList();
+
+            if (owned.Count == 0)
+            {
+                var reported = policies.Count(p => p?.CertificateAuthorityId != null);
+                _logger.LogError(
+                    "No policy in the HydrantId tenant belongs to CertificateAuthorityId '{ConfiguredCa}'. " +
+                    "{Reported} of {Total} policies report a certificateAuthorityId at all. Check the value against " +
+                    "the 'certificateAuthorityId' field on GET /api/v2/policies, or clear it to operate unscoped.",
+                    CertificateAuthorityId, reported, policies.Count);
+
+                throw new CertificateAuthorityScopeException(
+                    $"No policy in the HydrantId tenant belongs to CertificateAuthorityId '{CertificateAuthorityId}' " +
+                    $"({reported} of {policies.Count} policies report a certificateAuthorityId). Correct this CA's " +
+                    "CertificateAuthorityId to a value from the 'certificateAuthorityId' field on GET /api/v2/policies, " +
+                    "or clear it to operate unscoped.");
+            }
+
+            _logger.LogTrace("ResolveCaPolicyScopeAsync: {Owned} of {Total} policies belong to CA '{Ca}'",
+                owned.Count, policies.Count, CertificateAuthorityId);
+
+            return CaPolicyScope.For(owned);
+        }
 
         // Minimal IAnyCAPluginConfigProvider over a raw connectionInfo dictionary, used by
         // ValidateCAConnectionInfo -- that entry point runs before the Gateway ever calls
@@ -221,7 +352,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             }
         }
 
-        public Task ValidateCAConnectionInfo(Dictionary<string, object> connectionInfo)
+        public async Task ValidateCAConnectionInfo(Dictionary<string, object> connectionInfo)
         {
             using var flow = new FlowLogger(_logger, "ValidateCAConnectionInfo");
             _logger.MethodEntry();
@@ -253,7 +384,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                 flow.Skip("Validation", "CA is disabled");
                 _logger.LogWarning("The CA is currently in the Disabled state. It must be Enabled to perform operations. Skipping config validation...");
                 _logger.MethodExit();
-                return Task.CompletedTask;
+                return;
             }
 
             List<string> missingFields = new List<string>();
@@ -269,8 +400,22 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             }
 
             flow.Step("RequiredFields", "all present");
+            await Ping();
+
+            // Checked at save time so a CertificateAuthorityId that matches no policy -- a wrong
+            // GUID, or a tenant that does not populate certificateAuthorityId -- is reported while
+            // the operator is still on the config screen, rather than at the first sync.
+            if (IsCaScoped)
+            {
+                await flow.StepAsync("CertificateAuthorityScope", async () =>
+                {
+                    var scope = await ResolveCaPolicyScopeAsync(ClientFactory(Config));
+                    _logger.LogTrace("ValidateCAConnectionInfo: CA '{Ca}' owns {Count} policy(ies)",
+                        CertificateAuthorityId, scope.Policies.Count);
+                });
+            }
+
             _logger.MethodExit();
-            return Ping();
         }
 
         public Task ValidateProductInfo(EnrollmentProductInfo productInfo, Dictionary<string, object> connectionInfo)
@@ -304,10 +449,29 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                     return new List<string>();
                 }
 
+                // Scoped so an operator cannot map a template on this CA to a policy that issues
+                // from a different HydrantId CA -- the mismapping that cross-CA contamination
+                // starts from, since the policy list endpoint is account-scoped.
                 var ids = policies
                     .Where(p => p.Id.HasValue)
+                    .Where(PolicyBelongsToThisCa)
                     .Select(p => p.Name.ToString())
                     .ToList();
+
+                if (IsCaScoped)
+                {
+                    flow.Step("CertificateAuthorityScope",
+                        $"{ids.Count} of {policies.Count} policies belong to CA '{CertificateAuthorityId}'");
+
+                    if (ids.Count == 0)
+                    {
+                        _logger.LogError(
+                            "GetProductIds: no policy in the HydrantId tenant belongs to CertificateAuthorityId '{Ca}', so this CA " +
+                            "offers no Product IDs. Check the value against the 'certificateAuthorityId' field on " +
+                            "GET /api/v2/policies, or clear it to operate unscoped.",
+                            CertificateAuthorityId);
+                    }
+                }
 
                 flow.Step("MapPolicyIds", $"{ids.Count} product IDs found");
                 _logger.LogTrace("GetProductIds: found {Count} product IDs", ids.Count);
@@ -335,6 +499,17 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             var client = ClientFactory(Config);
             var processedCount = 0;
             var skippedCount = 0;
+            var filteredCount = 0;
+            var errorCount = 0;
+
+            // Resolved once per run: the certificate list is account-scoped, so this is what keeps
+            // another CA's certificates out of this CA's inventory.
+            var scope = await ResolveCaPolicyScopeAsync(client);
+            if (!scope.Unscoped)
+            {
+                flow.Step("CertificateAuthorityScope",
+                    $"CA '{CertificateAuthorityId}' owns {scope.Policies.Count} policy(ies): {string.Join(", ", scope.Policies.Select(p => p.Name))}");
+            }
 
             _ = client.GetSubmitCertificateListRequestAsync(certs, cancelToken);
 
@@ -366,6 +541,17 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                     }
 
                     _logger.LogTrace("Synchronize: Product ID={ProductId}", item.Policy?.Name ?? "(null)");
+
+                    // Checked before the detail fetch: a certificate belonging to another CA in
+                    // this tenant costs nothing beyond its list entry.
+                    if (!scope.Includes(item.Policy?.Id, item.Policy?.Name))
+                    {
+                        _logger.LogTrace(
+                            "Synchronize: filtering out ID={Id}, policy '{Policy}' does not belong to CertificateAuthorityId '{Ca}'",
+                            item.Id ?? "(null)", item.Policy?.Name ?? "(null)", CertificateAuthorityId);
+                        filteredCount++;
+                        continue;
+                    }
 
                     try
                     {
@@ -411,16 +597,18 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                     catch (Exception certEx)
                     {
                         _logger.LogError(certEx, "Synchronize: failed to retrieve or process cert ID={Id}: {Message}", item.Id ?? "(null)", certEx.Message);
-                        skippedCount++;
+                        errorCount++;
                     }
                 }
 
-                flow.Step("SyncComplete", $"processed={processedCount}, skipped={skippedCount}");
+                flow.Step("SyncComplete",
+                    $"processed={processedCount}, filtered={filteredCount}, skipped={skippedCount}, errors={errorCount}");
             }
             catch (OperationCanceledException)
             {
                 flow.Fail("Cancelled", "operation was cancelled");
-                _logger.LogWarning("Synchronize: operation was cancelled. Processed={Processed}, Skipped={Skipped}", processedCount, skippedCount);
+                _logger.LogWarning("Synchronize: operation was cancelled. Processed={Processed}, Filtered={Filtered}, Skipped={Skipped}, Errors={Errors}",
+                    processedCount, filteredCount, skippedCount, errorCount);
                 if (!blockingBuffer.IsAddingCompleted)
                     blockingBuffer.CompleteAdding();
                 throw;
@@ -587,6 +775,22 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                         };
                     }
 
+                    if (!PolicyBelongsToThisCa(policyId))
+                    {
+                        // Issuing here would put a certificate from another CA under this one,
+                        // which is the same boundary the sync scoping enforces.
+                        flow.Fail("CertificateAuthorityScope",
+                            $"policy '{policyId.Name}' belongs to CA '{policyId.CertificateAuthorityId?.ToString() ?? "(none reported)"}', not '{CertificateAuthorityId}'");
+                        return new EnrollmentResult
+                        {
+                            Status = (int)EndEntityStatus.FAILED,
+                            StatusMessage = $"Enrollment failed: policy '{policyId.Name}' belongs to certificate authority " +
+                                $"'{policyId.CertificateAuthorityId?.ToString() ?? "(none reported)"}', but this CA is scoped to " +
+                                $"CertificateAuthorityId '{CertificateAuthorityId}'. Enroll against the logical CA scoped to that " +
+                                "certificate authority, or correct this CA's CertificateAuthorityId."
+                        };
+                    }
+
                     _logger.LogTrace("Enroll: matched policy: {Json}", JsonConvert.SerializeObject(policyId));
                     flow.Step("MatchPolicy", $"policyId={policyId.Id}");
 
@@ -644,7 +848,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
 
                     flow.Step("LookupCertId", $"certificateId={certificateId}");
 
-                    var previousCert = await GetSingleRecord(certificateId);
+                    var previousCert = await GetSingleRecordAsync(certificateId, enforceCaScope: false);
 
                     if (previousCert == null || string.IsNullOrEmpty(previousCert.Certificate))
                     {
@@ -732,6 +936,20 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                             };
                         }
 
+                        if (!PolicyBelongsToThisCa(policyId))
+                        {
+                            flow.Fail("CertificateAuthorityScope",
+                                $"policy '{policyId.Name}' belongs to CA '{policyId.CertificateAuthorityId?.ToString() ?? "(none reported)"}', not '{CertificateAuthorityId}'");
+                            return new EnrollmentResult
+                            {
+                                Status = (int)EndEntityStatus.FAILED,
+                                StatusMessage = $"Re-issue failed: policy '{policyId.Name}' belongs to certificate authority " +
+                                    $"'{policyId.CertificateAuthorityId?.ToString() ?? "(none reported)"}', but this CA is scoped to " +
+                                    $"CertificateAuthorityId '{CertificateAuthorityId}'. Re-issue against the logical CA scoped to that " +
+                                    "certificate authority, or correct this CA's CertificateAuthorityId."
+                            };
+                        }
+
                         var reissueDomainValidationResult = await EnsureDomainsValidatedForPolicyAsync(client, flow, policyId, csr, san);
                         if (reissueDomainValidationResult != null)
                             return reissueDomainValidationResult;
@@ -798,7 +1016,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
 
                 _logger.LogTrace("Enroll: csrTrackingResponse ID={Id}", csrTrackingResponse.Id?.ToString() ?? "(null)");
 
-                var cert = await GetSingleRecord(csrTrackingResponse.Id.ToString());
+                var cert = await GetSingleRecordAsync(csrTrackingResponse.Id.ToString(), enforceCaScope: false);
                 var result = _requestManager.GetEnrollmentResult(csrTrackingResponse, cert);
 
                 flow.Step("EnrollmentComplete", $"status={result?.Status}, caRequestId={result?.CARequestID ?? "(null)"}");
@@ -1512,6 +1730,39 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                 var hydrantId = caRequestID.Substring(0, 36);
                 _logger.LogTrace("Revoke: extracted UUID='{Uuid}'", hydrantId);
 
+                // Revocation is effectively irreversible and the revoke endpoint is account-scoped,
+                // so a request routed to the wrong logical CA would otherwise revoke another CA's
+                // certificate. Worth one extra read before acting.
+                if (IsCaScoped)
+                {
+                    await flow.StepAsync("CertificateAuthorityScope", async () =>
+                    {
+                        var scope = await ResolveCaPolicyScopeAsync(client);
+                        var certificate = await client.GetSubmitGetCertificateAsync(hydrantId);
+
+                        if (certificate == null)
+                        {
+                            throw new CertificateAuthorityScopeException(
+                                $"Refusing to revoke '{hydrantId}': HydrantId returned no certificate for it, so it cannot be " +
+                                $"confirmed to belong to this CA's CertificateAuthorityId '{CertificateAuthorityId}'.");
+                        }
+
+                        if (!scope.Includes(certificate.Policy?.Id, certificate.Policy?.Name))
+                        {
+                            var policyLabel = certificate.Policy?.Name ?? "(no policy returned)";
+                            _logger.LogWarning(
+                                "Revoke: refusing to revoke '{Uuid}' -- issued under policy '{Policy}', which does not belong to " +
+                                "this CA's CertificateAuthorityId '{Ca}'.",
+                                hydrantId, policyLabel, CertificateAuthorityId);
+
+                            throw new CertificateAuthorityScopeException(
+                                $"Refusing to revoke certificate '{hydrantId}': it was issued under policy '{policyLabel}', which " +
+                                $"does not belong to this CA's CertificateAuthorityId '{CertificateAuthorityId}'. Revoke it from the " +
+                                "logical CA scoped to the certificate authority that issued it.");
+                        }
+                    });
+                }
+
                 RevocationReasons revokeReason = default;
                 flow.Step("MapRevokeReason", () =>
                 {
@@ -1536,6 +1787,12 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
 
                 flow.Step("RevokeComplete", $"revocationStatus={revokeResponse.RevocationStatus}");
                 return (int)EndEntityStatus.REVOKED;
+            }
+            catch (CertificateAuthorityScopeException)
+            {
+                // Already logged, and its message is the point -- wrapping it as an unexpected
+                // failure would bury why the revoke was refused.
+                throw;
             }
             catch (HttpRequestException httpEx)
             {
@@ -1597,7 +1854,24 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
             return null;
         }
 
-        public async Task<AnyCAPluginCertificate> GetSingleRecord(string caRequestID)
+        /// <summary>
+        /// Command's entry point for reading one certificate record, which honours
+        /// CertificateAuthorityId: a certificate issued under another CA's policy is not this
+        /// logical CA's record to return. The plugin's own post-enrollment and renewal lookups
+        /// deliberately bypass the check -- see <see cref="GetSingleRecordAsync"/>.
+        /// </summary>
+        public Task<AnyCAPluginCertificate> GetSingleRecord(string caRequestID) =>
+            GetSingleRecordAsync(caRequestID, enforceCaScope: true);
+
+        /// <summary>
+        /// <paramref name="enforceCaScope"/> is false for lookups this plugin makes about a
+        /// certificate it has just acted on itself (the enrollment result, or the prior
+        /// certificate in a renewal). Those are identified by an id the plugin was handed rather
+        /// than discovered by searching the tenant, and enrollment has already checked that the
+        /// policy it issued under belongs to this CA -- so re-checking buys no isolation while
+        /// adding a policy list round trip to every issuance.
+        /// </summary>
+        internal async Task<AnyCAPluginCertificate> GetSingleRecordAsync(string caRequestID, bool enforceCaScope)
         {
             using var flow = new FlowLogger(_logger, $"GetSingleRecord({caRequestID ?? "null"})");
             _logger.MethodEntry();
@@ -1637,6 +1911,30 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
 
                 _logger.LogTrace("GetSingleRecord: response JSON: {Json}", JsonConvert.SerializeObject(certificateResponse));
 
+                if (enforceCaScope && IsCaScoped)
+                {
+                    var scope = await ResolveCaPolicyScopeAsync(client);
+
+                    if (!scope.Includes(certificateResponse.Policy?.Id, certificateResponse.Policy?.Name))
+                    {
+                        // Surfaced rather than reported as a failed certificate: the certificate
+                        // is fine, it just belongs to a different CA, and saying so is what makes
+                        // a wrong CertificateAuthorityId diagnosable.
+                        var policyLabel = certificateResponse.Policy?.Name ?? "(no policy returned)";
+                        flow.Fail("CertificateAuthorityScope", $"policy '{policyLabel}' is not owned by CA '{CertificateAuthorityId}'");
+                        _logger.LogWarning(
+                            "GetSingleRecord: certificate '{CertId}' was issued under policy '{Policy}', which does not belong to " +
+                            "this CA's CertificateAuthorityId '{Ca}'; it belongs to a different logical CA and is not being returned.",
+                            certId, policyLabel, CertificateAuthorityId);
+
+                        throw new CertificateAuthorityScopeException(
+                            $"Certificate '{certId}' was issued under policy '{policyLabel}', which does not belong to this CA's " +
+                            $"CertificateAuthorityId '{CertificateAuthorityId}'. The certificate belongs to a different logical CA. " +
+                            "Request it from the logical CA scoped to the certificate authority that issued it, or correct this " +
+                            "CA's CertificateAuthorityId.");
+                    }
+                }
+
                 var endEntityCert = GetEndEntityCertificate(certificateResponse.Pem);
 
                 if (string.IsNullOrEmpty(endEntityCert))
@@ -1660,6 +1958,12 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                     Certificate = endEntityCert,
                     Status = mappedStatus,
                 };
+            }
+            catch (CertificateAuthorityScopeException)
+            {
+                // Already logged with the detail that makes it actionable, and its message is the
+                // point -- wrapping it as an unexpected error would bury that.
+                throw;
             }
             catch (AggregateException ae)
             {
