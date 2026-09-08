@@ -7,10 +7,13 @@
 // OR CONDITIONS OF ANY KIND, either express or implied. See the License for  
 // thespecific language governing permissions and limitations under the       
 // License. 
+using System;
+
 namespace Keyfactor.HydrantId.Interfaces
 {
     public interface INameObject
     {
+        Guid? Id { get;set; }
         string Name { get;set; }
     }
 }
