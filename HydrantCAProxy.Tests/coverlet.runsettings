@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RunSettings>
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat code coverage">
+        <Configuration>
+          <Format>cobertura</Format>
+          <!-- HawkNet is vendored third-party source (see Client/Authentication/LICENSE),
+               not code owned or maintained by this repo, so it is excluded from the coverage bar. -->
+          <Exclude>[HydrantIdCAPlugin]HawkNet.*</Exclude>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>
