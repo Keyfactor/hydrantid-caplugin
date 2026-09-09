@@ -1,7 +1,7 @@
 {
   "extensions": {
     "Keyfactor.AnyGateway.Extensions.IAnyCAPlugin": {
-      "GCPCASCAPlugin": {
+      "HydrantIdCAPlugin": {
         "assemblypath": "HydrantIdCAPlugin.dll",
         "TypeFullName": "Keyfactor.Extensions.CAPlugin.HydrantId.HydrantIdCAPlugin"
       }

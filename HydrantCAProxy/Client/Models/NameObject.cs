@@ -7,6 +7,7 @@
 // OR CONDITIONS OF ANY KIND, either express or implied. See the License for  
 // thespecific language governing permissions and limitations under the       
 // License. 
+using System;
 using Keyfactor.HydrantId.Interfaces;
 using Newtonsoft.Json;
 
@@ -14,6 +15,13 @@ namespace Keyfactor.HydrantId.Client.Models
 {
     public class NameObject : INameObject
     {
+        // HydrantId returns policy references as {"id": ..., "name": ...} on the certificate
+        // detail record; the list endpoint has only ever been observed returning the name. Mapped
+        // so CA scoping can match on the stable id whenever the API does supply it, and fall back
+        // to the name when it does not. See HydrantIdCAPlugin.CaPolicyScope.
+        [JsonProperty("id", NullValueHandling = NullValueHandling.Ignore)]
+        public Guid? Id { get; set; }
+
         [JsonProperty("name", NullValueHandling = NullValueHandling.Ignore)]
         public string Name { get; set; }
 
