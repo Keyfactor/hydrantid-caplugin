@@ -1,4 +1,4 @@
-# v1.1.0
+# v3.0.0
 * Added a CertificateAuthorityId CA connection setting that scopes a logical CA to one certificate authority within the HydrantId tenant, matched against the certificateAuthorityId each policy reports on GET /api/v2/policies. HydrantId's policy and certificate endpoints are account-scoped rather than CA-scoped, so a tenant issuing from more than one CA previously had every logical CA defined against it offer every policy, synchronize every certificate, and be able to revoke any of them -- cross-contaminating each CA's inventory in Command. Blank preserves the previous unscoped behaviour for single-CA tenants
 * Changed Synchronize to skip certificates whose policy belongs to another certificate authority, matching on the policy reference the certificate list already returns so a foreign certificate costs no detail fetch, and added filtered and error counts to the synchronization summary alongside the processed and skipped counts
 * Changed GetProductIds to offer only the policies belonging to this CA, so a Command template cannot be mapped to a policy that issues from a different certificate authority
