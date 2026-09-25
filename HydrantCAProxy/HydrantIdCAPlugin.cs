@@ -885,7 +885,7 @@ namespace Keyfactor.Extensions.CAPlugin.HydrantId
                         };
                     }
 
-                    var previousX509 = new X509Certificate2(Encoding.ASCII.GetBytes(previousCert.Certificate));
+                    var previousX509 = new X509Certificate2(Convert.FromBase64String(previousCert.Certificate));
                     var expiration = previousX509.NotAfter;
                     var now = DateTime.UtcNow;
 
