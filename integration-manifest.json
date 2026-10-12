@@ -12,6 +12,9 @@
     "gateway_framework": "24.2",
     "about": {
         "carest": {
+            "product_ids": [
+                "certificate"
+            ],
             "ca_plugin_config": [
                 {
                     "name": "HydrantIdBaseUrl",
